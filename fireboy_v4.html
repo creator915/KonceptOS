@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fire Boy & Water Girl</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: Arial, sans-serif; }
+canvas { border: 2px solid #444; }
+#ui { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 16px; text-align: center; z-index: 10; }
+#instructions { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); color: #aaa; font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="ui">
+<span id="score">Red Gems: 0/3 | Blue Gems: 0/3</span>
+<span id="status" style="margin-left: 20px;"></span>
+</div>
+<canvas id="game" width="800" height="600"></canvas>
+<div id="instructions">Fire Boy: WASD | Water Girl: Arrow Keys | R: Restart</div>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = 800, H = 600;
+
+// Physics constants
+const GRAVITY = 0.6;
+const JUMP_SPEED = 12;
+const MOVE_SPEED = 4;
+const MAX_JUMP_HEIGHT = (JUMP_SPEED * JUMP_SPEED) / (2 * GRAVITY); // = 120px
+const CHAR_W = 20;
+const CHAR_H = 36;
+// Max jumpable gap (top-edge difference): MAX_JUMP_HEIGHT - CHAR_H = 84px
+// Horizontal jump distance: MOVE_SPEED * (2 * JUMP_SPEED / GRAVITY) = 4 * 40 = 160px
+
+const TILE = 20;
+const COLS = W / TILE; // 40
+const ROWS = H / TILE; // 30
+
+// Keys
+const keys = {};
+document.addEventListener('keydown', e => { keys[e.code] = true; if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault(); });
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// Level data - tile map
+// 0=empty, 1=wall, 2=lava, 3=water, 4=poison
+// We'll also have entity lists for gems, doors, switches, moving platforms, boxes
+
+let level, fireBoy, waterGirl, redGems, blueGems, fireDoor, waterDoor, buttons, movingPlatforms, pushBoxes;
+let redCollected, blueCollected, gameOver, gameWin;
+
+function initLevel() {
+    redCollected = 0;
+    blueCollected = 0;
+    gameOver = false;
+    gameWin = false;
+
+    // Build tile map (40 x 30)
+    level = [];
+    for (let r = 0; r < ROWS; r++) {
+        level[r] = [];
+        for (let c = 0; c < COLS; c++) {
+            level[r][c] = 0;
+        }
+    }
+
+    // Borders
+    for (let c = 0; c < COLS; c++) {
+        level[0][c] = 1;        // top
+        level[ROWS-1][c] = 1;   // bottom floor
+    }
+    for (let r = 0; r < ROWS; r++) {
+        level[r][0] = 1;        // left
+        level[r][COLS-1] = 1;   // right
+    }
+
+    // Ground floor (row 29 is already wall, add row 28 as extra thickness)
+    for (let c = 0; c < COLS; c++) {
+        level[ROWS-2][c] = 1;
+    }
+    // Ground top_y = (ROWS-2) * TILE = 560
+
+    // === LEVEL DESIGN ===
+    // Self-check: ground_top_y = 560
+    // max_jump_height = 120, char_height = 36
+    // Max gap from ground: 120 - 36 = 84px => first platform top_y >= 560 - 84 = 476
+    // We'll use top_y = 480 (row 24) => gap = 80px ✓
+
+    // Platform 1: row 24, cols 3-12 (top_y = 480, gap from ground = 80px ✓)
+    for (let c = 3; c <= 12; c++) level[24][c] = 1;
+
+    // Platform 2: row 24, cols 18-28 (same height, reachable horizontally from plat1 or ground)
+    for (let c = 18; c <= 28; c++) level[24][c] = 1;
+
+    // Platform 3: row 24, cols 33-38
+    for (let c = 33; c <= 38; c++) level[24][c] = 1;
+
+    // Platform 4: row 20, cols 6-16 (top_y = 400, gap from plat1 = 80px ✓)
+    for (let c = 6; c <= 16; c++) level[20][c] = 1;
+
+    // Platform 5: row 20, cols 24-34 (top_y = 400, gap from plat2 = 80px ✓)
+    for (let c = 24; c <= 34; c++) level[20][c] = 1;
+
+    // Platform 6: row 16, cols 1-10 (top_y = 320, gap from plat4 = 80px ✓)
+    for (let c = 1; c <= 10; c++) level[16][c] = 1;
+
+    // Platform 7: row 16, cols 20-30 (top_y = 320, gap from plat5 = 80px ✓)
+    for (let c = 20; c <= 30; c++) level[16][c] = 1;
+
+    // Platform 8: row 12, cols 12-22 (top_y = 240, gap from plat6/7 = 80px ✓)
+    for (let c = 12; c <= 22; c++) level[12][c] = 1;
+
+    // Exit platform: row 8, cols 14-26 (top_y = 160, gap from plat8 = 80px ✓)
+    for (let c = 14; c <= 26; c++) level[8][c] = 1;
+
+    // Small wall divider on exit platform between doors
+    level[7][20] = 1;
+    level[6][20] = 1;
+
+    // Hazard pools on ground floor
+    // Lava pool: cols 14-16 on ground (row 27, replace ground tiles)
+    // Actually we place liquid ON the ground row-1 positions. Let's carve ground and place liquid.
+    // Carve a pit and fill with lava
+    for (let c = 14; c <= 16; c++) {
+        level[ROWS-2][c] = 2; // lava
+    }
+
+    // Water pool: cols 30-32 on ground
+    for (let c = 30; c <= 32; c++) {
+        level[ROWS-2][c] = 3; // water
+    }
+
+    // Poison pool on platform 5 area - small pool on ground at cols 22-23
+    // Actually let's place poison between platforms at ground level
+    level[ROWS-2][8] = 4;  // poison (width=1 tile = 20px, easily jumpable)
+    level[ROWS-2][9] = 4;
+
+    // Pool width check: lava = 3 tiles = 60px, horiz jump dist = 160px ✓
+    // Water = 3 tiles = 60px ✓
+    // Poison = 2 tiles = 40px ✓
+
+    // Switch/button on platform 2 (row 24, col 23) -> controls moving platform
+    buttons = [
+        { x: 23 * TILE, y: 24 * TILE - 8, w: TILE, h: 8, pressed: false, linkedPlatform: 0 }
+    ];
+
+    // Moving platform (initially at row 12, moves between row 12 and row 16 area)
+    // Links from button 0
+    // Speed must be <= 80% of move_speed = 3.2
+    movingPlatforms = [
+        { x: 32 * TILE, y: 16 * TILE, w: 4 * TILE, h: TILE/2, minY: 12 * TILE, maxY: 16 * TILE, speed: 2, dir: -1, active: false, auto: true }
+    ];
+
+    // Pushable box on platform 6
+    pushBoxes = [
+        { x: 4 * TILE, y: 16 * TILE - TILE, w: TILE, h: TILE, vy: 0, grounded: false }
+    ];
+
+    // Red gems (for Fire Boy)
+    redGems = [
+        { x: 8 * TILE + 4, y: 24 * TILE - 20, w: 12, h: 12, collected: false },
+        { x: 28 * TILE + 4, y: 20 * TILE - 20, w: 12, h: 12, collected: false },
+        { x: 17 * TILE + 4, y: 12 * TILE - 20, w: 12, h: 12, collected: false }
+    ];
+
+    // Blue gems (for Water Girl)
+    blueGems = [
+        { x: 22 * TILE + 4, y: 24 * TILE - 20, w: 12, h: 12, collected: false },
+        { x: 8 * TILE + 4, y: 16 * TILE - 20, w: 12, h: 12, collected: false },
+        { x: 15 * TILE + 4, y: 12 * TILE - 20, w: 12, h: 12, collected: false }
+    ];
+
+    // Exit doors on exit platform (row 8, top_y = 160)
+    fireDoor = { x: 16 * TILE, y: 8 * TILE - 40, w: 24, h: 40, open: false };
+    waterDoor = { x: 22 * TILE, y: 8 * TILE - 40, w: 24, h: 40, open: false };
+
+    // Players start on ground
+    fireBoy = {
+        x: 3 * TILE, y: (ROWS-2) * TILE - CHAR_H,
+        w: CHAR_W, h: CHAR_H,
+        vx: 0, vy: 0,
+        grounded: false,
+        type: 'fire',
+        alive: true,
+        atDoor: false
+    };
+
+    waterGirl = {
+        x: 6 * TILE, y: (ROWS-2) * TILE - CHAR_H,
+        w: CHAR_W, h: CHAR_H,
+        vx: 0, vy: 0,
+        grounded: false,
+        type: 'water',
+        alive: true,
+        atDoor: false
+    };
+}
+
+function getTile(px, py) {
+    let c = Math.floor(px / TILE);
+    let r = Math.floor(py / TILE);
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return 1;
+    return level[r][c];
+}
+
+function isSolid(tileVal) {
+    return tileVal === 1;
+}
+
+function isHazardForPlayer(tileVal, playerType) {
+    if (tileVal === 4) return true; // poison kills both
+    if (tileVal === 2 && playerType === 'water') return true; // lava kills water girl
+    if (tileVal === 3 && playerType === 'fire') return true; // water kills fire boy
+    return false;
+}
+
+function rectOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function resolveCollisionWithTiles(entity) {
+    // Horizontal
+    entity.x += entity.vx;
+    
+    // Check tile collisions
+    let left = Math.floor(entity.x / TILE);
+    let right = Math.floor((entity.x + entity.w - 1) / TILE);
+    let top = Math.floor(entity.y / TILE);
+    let bottom = Math.floor((entity.y + entity.h - 1) / TILE);
+
+    for (let r = top; r <= bottom; r++) {
+        for (let c = left; c <= right; c++) {
+            if (r < 0 || r >= ROWS || c < 0 || c >= COLS) continue;
+            if (isSolid(level[r][c])) {
+                if (entity.vx > 0) {
+                    entity.x = c * TILE - entity.w;
+                } else if (entity.vx < 0) {
+                    entity.x = (c + 1) * TILE;
+                }
+                entity.vx = 0;
+            }
+        }
+    }
+
+    // Vertical
+    entity.vy += GRAVITY;
+    if (entity.vy > 15) entity.vy = 15;
+    entity.y += entity.vy;
+
+    entity.grounded = false;
+
+    left = Math.floor(entity.x / TILE);
+    right = Math.floor((entity.x + entity.w - 1) / TILE);
+    top = Math.floor(entity.y / TILE);
+    bottom = Math.floor((entity.y + entity.h - 1) / TILE);
+
+    for (let r = top; r <= bottom; r++) {
+        for (let c = left; c <= right; c++) {
+            if (r < 0 || r >= ROWS || c < 0 || c >= COLS) continue;
+            if (isSolid(level[r][c])) {
+                if (entity.vy > 0) {
+                    entity.y = r * TILE - entity.h;
+                    entity.vy = 0;
+                    entity.grounded = true;
+                } else if (entity.vy < 0) {
+                    entity.y = (r + 1) * TILE;
+                    entity.vy = 0;
+                }
+            }
+        }
+    }
+}
+
+function checkHazards(player) {
+    // Check corners of player against hazard tiles
+    let points = [
+        { x: player.x + 2, y: player.y + player.h - 2 },
+        { x: player.x + player.w - 2, y: player.y + player.h - 2 },
+        { x: player.x + player.w / 2, y: player.y + player.h - 2 }
+    ];
+    for (let p of points) {
+        let tile = getTile(p.x, p.y);
+        if (isHazardForPlayer(tile, player.type)) {
+            player.alive = false;
+            return;
+        }
+    }
+}
+
+function standingOnPlatform(entity, plat) {
+    return entity.x + entity.w > plat.x && entity.x < plat.x + plat.w &&
+           entity.y + entity.h >= plat.y && entity.y + entity.h <= plat.y + plat.h + 4 &&
+           entity.vy >= 0;
+}
+
+function resolveMovingPlatforms(entity) {
+    for (let mp of movingPlatforms) {
+        // Check if entity is on the platform
+        if (standingOnPlatform(entity, mp)) {
+            entity.y = mp.y - entity.h;
+            entity.vy = 0;
+            entity.grounded = true;
+            // Move with platform
+            if (mp.auto || mp.active) {
+                entity.y += mp.speed * mp.dir;
+            }
+        }
+        // Side/bottom collision
+        let eRect = { x: entity.x, y: entity.y, w: entity.w, h: entity.h };
+        let pRect = { x: mp.x, y: mp.y, w: mp.w, h: mp.h };
+        if (rectOverlap(eRect, pRect)) {
+            // Push out
+            if (entity.vy < 0 && entity.y < mp.y + mp.h) {
+                entity.y = mp.y + mp.h;
+                entity.vy = 0;
+            }
+        }
+    }
+}
+
+function updatePushBox(box, pushers) {
+    // Gravity
+    box.vy += GRAVITY;
+    if (box.vy > 15) box.vy = 15;
+    box.y += box.vy;
+    box.grounded = false;
+
+    // Tile collision (vertical)
+    let left = Math.floor(box.x / TILE);
+    let right = Math.floor((box.x + box.w - 1) / TILE);
+    let top = Math.floor(box.y / TILE);
+    let bottom = Math.floor((box.y + box.h - 1) / TILE);
+
+    for (let r = top; r <= bottom; r++) {
+        for (let c = left; c <= right; c++) {
+            if (r < 0 || r >= ROWS || c < 0 || c >= COLS) continue;
+            if (isSolid(level[r][c])) {
+                if (box.vy > 0) {
+                    box.y = r * TILE - box.h;
+                    box.vy = 0;
+                    box.grounded = true;
+                } else if (box.vy < 0) {
+                    box.y = (r + 1) * TILE;
+                    box.vy = 0;
+                }
+            }
+        }
+    }
+
+    // Push by players
+    for (let p of pushers) {
+        let pRect = { x: p.x, y: p.y, w: p.w, h: p.h };
+        let bRect = { x: box.x, y: box.y, w: box.w, h: box.h };
+        if (rectOverlap(pRect, bRect)) {
+            // Determine push direction
+            let overlapLeft = (p.x + p.w) - box.x;
+            let overlapRight = (box.x + box.w) - p.x;
+            let overlapTop = (p.y + p.h) - box.y;
+            let overlapBottom = (box.y + box.h) - p.y;
+
+            let minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+            if (minOverlap === overlapTop && p.vy >= 0) {
+                // Player on top of box
+                p.y = box.y - p.h;
+                p.vy = 0;
+                p.grounded = true;
+            } else if (minOverlap === overlapLeft && p.vx > 0) {
+                // Push box right
+                let newX = box.x + MOVE_SPEED * 0.5;
+                // Check if box can move there
+                let testC = Math.floor((newX + box.w - 1) / TILE);
+                let testTop = Math.floor(box.y / TILE);
+                let testBot = Math.floor((box.y + box.h - 1) / TILE);
+                let blocked = false;
+                for (let r = testTop; r <= testBot; r++) {
+                    if (isSolid(level[r][testC])) blocked = true;
+                }
+                if (!blocked) {
+                    box.x = newX;
+                    p.x = box.x - p.w;
+                }
+            } else if (minOverlap === overlapRight && p.vx < 0) {
+                // Push box left
+                let newX = box.x - MOVE_SPEED * 0.5;
+                let testC = Math.floor(newX / TILE);
+                let testTop = Math.floor(box.y / TILE);
+                let testBot = Math.floor((box.y + box.h - 1) / TILE);
+                let blocked = false;
+                for (let r = testTop; r <= testBot; r++) {
+                    if (isSolid(level[r][testC])) blocked = true;
+                }
+                if (!blocked) {
+                    box.x = newX;
+                    p.x = box.x + box.w;
+                }
+            } else if (minOverlap === overlapBottom) {
+                p.y = box.y + box.h;
+                p.vy = 0;
+            }
+        }
+    }
+}
+
+function checkButtonPress(btn, players, boxes) {
+    btn.pressed = false;
+    let bRect = { x: btn.x, y: btn.y, w: btn.w, h: btn.h };
+    for (let p of [...players, ...boxes]) {
+        let eRect = { x: p.x, y: p.y + p.h - 4, w: p.w, h: 4 };
+        // Check if entity is standing on button area
+        if (p.x + p.w > btn.x && p.x < btn.x + btn.w &&
+            Math.abs((p.y + p.h) - btn.y) < 6 && (p.grounded !== undefined ? p.grounded : true)) {
+            btn.pressed = true;
+        }
+    }
+}
+
+function update() {
+    if (gameOver || gameWin) {
+        if (keys['KeyR']) initLevel();
+        return;
+    }
+
+    // Fire Boy input (WASD)
+    fireBoy.vx = 0;
+    if (keys['KeyA']) fireBoy.vx = -MOVE_SPEED;
+    if (keys['KeyD']) fireBoy.vx = MOVE_SPEED;
+    if (keys['KeyW'] && fireBoy.grounded) {
+        fireBoy.vy = -JUMP_SPEED;
+        fireBoy.grounded = false;
+    }
+
+    // Water Girl input (Arrow keys)
+    waterGirl.vx = 0;
+    if (keys['ArrowLeft']) waterGirl.vx = -MOVE_SPEED;
+    if (keys['ArrowRight']) waterGirl.vx = MOVE_SPEED;
+    if (keys['ArrowUp'] && waterGirl.grounded) {
+        waterGirl.vy = -JUMP_SPEED;
+        waterGirl.grounded = false;
+    }
+
+    // Update moving platforms
+    for (let mp of movingPlatforms) {
+        if (mp.auto || mp.active) {
+            mp.y += mp.speed * mp.dir;
+            if (mp.y <= mp.minY) { mp.y = mp.minY; mp.dir = 1; }
+            if (mp.y >= mp.maxY) { mp.y = mp.maxY; mp.dir = -1; }
+        }
+    }
+
+    // Physics for players
+    resolveCollisionWithTiles(fireBoy);
+    resolveCollisionWithTiles(waterGirl);
+
+    // Moving platform interactions
+    resolveMovingPlatforms(fireBoy);
+    resolveMovingPlatforms(waterGirl);
+
+    // Push boxes
+    for (let box of pushBoxes) {
+        updatePushBox(box, [fireBoy, waterGirl]);
+    }
+
+    // Buttons
+    for (let btn of buttons) {
+        checkButtonPress(btn, [fireBoy, waterGirl], pushBoxes);
+        // Link button to moving platform
+        if (btn.linkedPlatform !== undefined) {
+            movingPlatforms[btn.linkedPlatform].active = btn.pressed;
+        }
+    }
+
+    // Player can stand on boxes
+    for (let box of pushBoxes) {
+        for (let p of [fireBoy, waterGirl]) {
+            if (p.x + p.w > box.x && p.x < box.x + box.w &&
+                p.y + p.h >= box.y && p.y + p.h <= box.y + 6 && p.vy >= 0) {
+                p.y = box.y - p.h;
+                p.vy = 0;
+                p.grounded = true;
+            }
+        }
+    }
+
+    // Hazard checks
+    checkHazards(fireBoy);
+    checkHazards(waterGirl);
+
+    if (!fireBoy.alive || !waterGirl.alive) {
+        gameOver = true;
+        return;
+    }
+
+    // Gem collection
+    for (let gem of redGems) {
+        if (!gem.collected && rectOverlap(fireBoy, gem)) {
+            gem.collected = true;
+            redCollected++;
+        }
+    }
+    for (let gem of blueGems) {
+        if (!gem.collected && rectOverlap(waterGirl, gem)) {
+            gem.collected = true;
+            blueCollected++;
+        }
+    }
+
+    // Door check
+    fireBoy.atDoor = rectOverlap(fireBoy, fireDoor);
+    waterGirl.atDoor = rectOverlap(waterGirl, waterDoor);
+
+    if (fireBoy.atDoor && waterGirl.atDoor) {
+        gameWin = true;
+    }
+
+    // Restart
+    if (keys['KeyR']) initLevel();
+}
+
+function drawTile(c, r, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+}
+
+function draw() {
+    ctx.fillStyle = '#16213e';
+    ctx.fillRect(0, 0, W, H);
+
+    // Draw tiles
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            let t = level[r][c];
+            if (t === 1) {
+                ctx.fillStyle = '#4a4a6a';
+                ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+                ctx.strokeStyle = '#3a3a5a';
+                ctx.strokeRect(c * TILE, r * TILE, TILE, TILE);
+            } else if (t === 2) {
+                // Lava
+                ctx.fillStyle = '#ff4500';
+                ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+                // Animated glow
+                ctx.fillStyle = `rgba(255, 200, 0, ${0.3 + 0.2 * Math.sin(Date.now() / 200 + c)})`;
+                ctx.fillRect(c * TILE, r * TILE, TILE, TILE / 2);
+            } else if (t === 3) {
+                // Water
+                ctx.fillStyle = '#1e90ff';
+                ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+                ctx.fillStyle = `rgba(100, 200, 255, ${0.3 + 0.2 * Math.sin(Date.now() / 300 + c)})`;
+                ctx.fillRect(c * TILE, r * TILE, TILE, TILE / 2);
+            } else if (t === 4) {
+                // Poison
+                ctx.fillStyle = '#32cd32';
+                ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+                ctx.fillStyle = `rgba(0, 255, 0, ${0.3 + 0.15 * Math.sin(Date.now() / 250 + c)})`;
+                ctx.fillRect(c * TILE, r * TILE, TILE, TILE / 2);
+            }
+        }
+    }
+
+    // Draw moving platforms
+    for (let mp of movingPlatforms) {
+        ctx.fillStyle = '#888';
+        ctx.fillRect(mp.x, mp.y, mp.w, mp.h);
+        ctx.strokeStyle = '#aaa';
+        ctx.strokeRect(mp.x, mp.y, mp.w, mp.h);
+    }
+
+    // Draw push boxes
+    for (let box of pushBoxes) {
+        ctx.fillStyle = '#8B4513';
+        ctx.fillRect(box.x, box.y, box.w, box.h);
+        ctx.strokeStyle = '#A0522D';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(box.x, box.y, box.w, box.h);
+        // Cross pattern
+        ctx.beginPath();
+        ctx.moveTo(box.x, box.y);
+        ctx.lineTo(box.x + box.w, box.y + box.h);
+        ctx.moveTo(box.x + box.w, box.y);
+        ctx.lineTo(box.x, box.y + box.h);
+        ctx.strokeStyle = '#654321';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+
+    // Draw buttons
+    for (let btn of buttons) {
+        ctx.fillStyle = btn.pressed ? '#ff0' : '#aa0';
+        ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+        // Base
+        ctx.fillStyle = '#666';
+        ctx.fillRect(btn.x - 2, btn.y + btn.h - 2, btn.w + 4, 4);
+    }
+
+    // Draw gems
+    for (let gem of redGems) {
+        if (gem.collected) continue;
+        ctx.fillStyle = '#ff3333';
+        ctx.beginPath();
+        let cx = gem.x + gem.w / 2, cy = gem.y + gem.h / 2;
+        // Diamond shape
+        ctx.moveTo(cx, cy - gem.h / 2);
+        ctx.lineTo(cx + gem.w / 2, cy);
+        ctx.lineTo(cx, cy + gem.h / 2);
+        ctx.lineTo(cx - gem.w / 2, cy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#ff9999';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+    for (let gem of blueGems) {
+        if (gem.collected) continue;
+        ctx.fillStyle = '#3399ff';
+        ctx.beginPath();
+        let cx = gem.x + gem.w / 2, cy = gem.y + gem.h / 2;
+        ctx.moveTo(cx, cy - gem.h / 2);
+        ctx.lineTo(cx + gem.w / 2, cy);
+        ctx.lineTo(cx, cy + gem.h / 2);
+        ctx.lineTo(cx - gem.w / 2, cy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#99ccff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+
+    // Draw doors
+    // Fire door
+    ctx.fillStyle = fireBoy.atDoor ? '#ff6600' : '#cc3300';
+    ctx.fillRect(fireDoor.x, fireDoor.y, fireDoor.w, fireDoor.h);
+    ctx.fillStyle = '#ff9933';
+    ctx.fillRect(fireDoor.x + 4, fireDoor.y + 4, fireDoor.w - 8, fireDoor.h - 8);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px Arial';
+    ctx.fillText('F', fireDoor.x + 8, fireDoor.y + 24);
+
+    // Water door
+    ctx.fillStyle = waterGirl.atDoor ? '#3399ff' : '#0066cc';
+    ctx.fillRect(waterDoor.x, waterDoor.y, waterDoor.w, waterDoor.h);
+    ctx.fillStyle = '#66bbff';
+    ctx.fillRect(waterDoor.x + 4, waterDoor.y + 4, waterDoor.w - 8, waterDoor.h - 8);
+    ctx.fillStyle = '#fff';
+    ctx.fillText('W', waterDoor.x + 7, waterDoor.y + 24);
+
+    // Draw Fire Boy
+    if (fireBoy.alive) {
+        // Body
+        ctx.fillStyle = '#ff4500';
+        ctx.fillRect(fireBoy.x, fireBoy.y + 10, fireBoy.w, fireBoy.h - 10);
+        // Head
+        ctx.fillStyle = '#ff6633';
+        ctx.beginPath();
+        ctx.arc(fireBoy.x + fireBoy.w / 2, fireBoy.y + 8, 8, 0, Math.PI * 2);
+        ctx.fill();
+        // Flame hair
+        ctx.fillStyle = '#ffcc00';
+        ctx.beginPath();
+        ctx.moveTo(fireBoy.x + 3, fireBoy.y + 4);
+        ctx.lineTo(fireBoy.x + fireBoy.w / 2, fireBoy.y - 6 - 3 * Math.sin(Date.now() / 100));
+        ctx.lineTo(fireBoy.x + fireBoy.w - 3, fireBoy.y + 4);
+        ctx.closePath();
+        ctx.fill();
+        // Eyes
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(fireBoy.x + 5, fireBoy.y + 5, 3, 3);
+        ctx.fillRect(fireBoy.x + 12, fireBoy.y + 5, 3, 3);
+    }
+
+    // Draw Water Girl
+    if (waterGirl.alive) {
+        // Body
+        ctx.fillStyle = '#1e90ff';
+        ctx.fillRect(waterGirl.x, waterGirl.y + 10, waterGirl.w, waterGirl.h - 10);
+        // Head
+        ctx.fillStyle = '#4db8ff';
+        ctx.beginPath();
+        ctx.arc(waterGirl.x + waterGirl.w / 2, waterGirl.y + 8, 8, 0, Math.PI * 2);
+        ctx.fill();
+        // Water droplet hair
+        ctx.fillStyle = '#00bfff';
+        ctx.beginPath();
+        ctx.moveTo(waterGirl.x + fireBoy.w / 2, waterGirl.y - 5 - 2 * Math.sin(Date.now() / 150));
+        ctx.quadraticCurveTo(waterGirl.x + fireBoy.w / 2 + 6, waterGirl.y + 2, waterGirl.x + fireBoy.w / 2, waterGirl.y + 5);
+        ctx.quadraticCurveTo(waterGirl.x + fireBoy.w / 2 - 6, waterGirl.y + 2, waterGirl.x + fireBoy.w / 2, waterGirl.y - 5 - 2 * Math.sin(Date.now() / 150));
+        ctx.fill();
+        // Eyes
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(waterGirl.x + 5, waterGirl.y + 5, 3, 3);
+        ctx.fillRect(waterGirl.x + 12, waterGirl.y + 5, 3, 3);
+    }
+
+    // UI
+    document.getElementById('score').textContent = `Red Gems: ${redCollected}/3 | Blue Gems: ${blueCollected}/3`;
+
+    if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#ff4444';
+        ctx.font = '48px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', W / 2, H / 2 - 20);
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px Arial';
+        ctx.fillText('Press R to restart', W / 2, H / 2 + 20);
+        ctx.textAlign = 'left';
+    }
+
+    if (gameWin) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#44ff44';
+        ctx.font = '48px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('LEVEL COMPLETE!', W / 2, H / 2 - 20);
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px Arial';
+        ctx.fillText(`Gems: ${redCollected + blueCollected}/6 | Press R to replay`, W / 2, H / 2 + 20);
+        ctx.textAlign = 'left';
+    }
+}
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+initLevel();
+
+// Self-check trace:
+// Ground top_y = 560
+// Platform 1 top_y = 480 => gap = 80 < 84 ✓
+// Platform 4 top_y = 400 => gap from plat1 = 80 < 84 ✓
+// Platform 6 top_y = 320 => gap from plat4 = 80 < 84 ✓
+// Platform 8 top_y = 240 => gap from plat6 = 80 < 84 ✓
+// Exit platform top_y = 160 => gap from plat8 = 80 < 84 ✓
+// All horizontal gaps between platforms are within jump distance (160px) ✓
+// Lava pool 60px < 160px horiz jump ✓
+// Water pool 60px < 160px horiz jump ✓
+// Poison pool 40px < 160px horiz jump ✓
+// Moving platform speed 2 < 3.2 (80% of 4) ✓
+// All gems on reachable platforms ✓
+// Both doors on reachable platform ✓
+
+gameLoop();
+</script>
+</body>
+</html>

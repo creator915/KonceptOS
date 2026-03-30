@@ -1,0 +1,89 @@
+{
+  "domain": "2d_platformer",
+
+  "conventions": [
+    "JUMP REACHABILITY: A character standing on a lower platform and jumping must be able to land on the upper platform. Formula: max_jump_height = jump_speed^2 / (2 * gravity). The TOP EDGE of the upper platform must satisfy: upper_top_y > lower_top_y - max_jump_height + character_height. Example: gravity=0.5, jump_speed=12, max_jump_height=144px, character_height=40px => max platform top-edge difference = 104px.",
+    "GROUND TO FIRST PLATFORM: The first reachable platform above the ground MUST be jumpable from ground level. Verify: first_platform_top_y > ground_top_y - (max_jump_height - character_height). This is the most common level design failure.",
+    "PLATFORM THICKNESS: Jumpable gap = upper_platform_top_y - lower_platform_top_y. NOT bottom-edge to top-edge. The platform's visual thickness does not add to jumpable distance.",
+    "RECOMMENDED PHYSICS: gravity=0.5-0.8 px/frame^2, jump_speed=10-14 px/frame, move_speed=3-5 px/frame. With these params max_jump_height is 90-200px. Platform gaps should be 60-130px.",
+    "SCREEN FIT: For fixed-camera games, all level content must fit within canvas width x height. For scrolling games, specify scroll direction explicitly.",
+    "PASSAGE WIDTH: Character collision box width < narrowest passage width. All paths must be physically traversable.",
+    "MOVING PLATFORM SPEED: Must be <= 80% of character move speed, otherwise character cannot stand stably.",
+    "TWO-PLAYER CONTROLS: Two players must use non-conflicting key sets (e.g. WASD + Arrow keys). Never bind the same key to both players.",
+    "UNIFORM GRAVITY: All entities subject to gravity must use the same gravity constant. No per-entity gravity unless explicitly designed.",
+    "COLLECTIBLE PLACEMENT: Every collectible must be reachable by at least one character via jumping from available platforms.",
+    "LIQUID POOL WIDTH: Pool width < max horizontal jump distance. Horizontal jump distance = move_speed * (2 * jump_speed / gravity). Or provide an alternative path (bridge, moving platform).",
+    "SELF-CHECK AFTER GENERATION: After generating level data, mentally trace the intended path from ground to exit. Verify every jump is reachable with the physics constants defined."
+  ],
+
+  "obj_vocab": [
+    "game_loop", "input_manager", "physics_engine", "collision_detector", "renderer", "camera", "map_system", "scene_manager",
+    "player_character", "enemy", "collectible", "interactive_object",
+    "patrol_enemy", "flying_enemy", "stationary_enemy",
+    "gui_hud", "sfx_trigger", "bgm_manager", "particle_effects"
+  ],
+
+  "attr_vocab": [
+    "position", "velocity", "collider", "sprite", "animation_state", "input_state",
+    "map_data", "frame_timer", "camera_viewport", "alive_status", "spawn_despawn",
+    "score", "lives", "sfx_channel", "bgm_channel", "level_structure"
+  ],
+
+  "obj_tree": {
+    "entity": ["player_character", "enemy", "collectible", "interactive_object"],
+    "enemy": ["patrol_enemy", "flying_enemy", "stationary_enemy"],
+    "system": ["game_loop", "input_manager", "physics_engine", "collision_detector", "renderer", "camera", "map_system", "scene_manager"],
+    "audio": ["sfx_trigger", "bgm_manager"]
+  },
+
+  "attr_tree": {
+    "physics": ["position", "velocity", "collider"],
+    "visual": ["sprite", "animation_state"],
+    "lifecycle": ["alive_status", "spawn_despawn"],
+    "audio": ["sfx_channel", "bgm_channel"],
+    "game_state": ["score", "lives"]
+  },
+
+  "incidence_hints": {
+    "physics_engine|velocity": "R",
+    "physics_engine|position": "W",
+    "physics_engine|frame_timer": "R",
+    "collision_detector|position": "R",
+    "collision_detector|velocity": "R",
+    "collision_detector|collider": "R",
+    "collision_detector|frame_timer": "R",
+    "renderer|position": "R",
+    "renderer|sprite": "R",
+    "renderer|animation_state": "R",
+    "renderer|camera_viewport": "R",
+    "renderer|frame_timer": "R",
+    "camera|position": "R",
+    "camera|frame_timer": "R",
+    "game_loop|frame_timer": "W",
+    "input_manager|input_state": "W",
+    "input_manager|frame_timer": "R",
+    "map_system|map_data": "W",
+    "map_system|level_structure": "R",
+    "scene_manager|spawn_despawn": "W",
+    "scene_manager|level_structure": "R",
+    "gui_hud|score": "R",
+    "gui_hud|lives": "R",
+    "gui_hud|frame_timer": "R",
+    "sfx_trigger|sfx_channel": "R",
+    "bgm_manager|bgm_channel": "R",
+    "bgm_manager|level_structure": "R",
+    "player_character|input_state": "R",
+    "player_character|velocity": "W",
+    "*|collider": "R",
+    "*|map_data": "R",
+    "*|frame_timer": "R"
+  },
+
+  "core_objects": ["game_loop", "input_manager", "physics_engine", "collision_detector", "renderer", "map_system"],
+  "core_attributes": ["position", "velocity", "collider", "sprite", "animation_state", "input_state", "map_data", "frame_timer"],
+
+  "extension_points": {
+    "objects": ["enemy_types", "collectible_types", "interactive_object_types", "special_mechanics"],
+    "attributes": ["character_special_state", "special_event_channel", "win_condition"]
+  }
+}
