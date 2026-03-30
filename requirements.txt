@@ -1,0 +1,5 @@
+# KonceptOS has no third-party dependencies.
+# Python 3.8+ required.
+#
+# LLM access requires an OpenRouter API key:
+#   export OPENROUTER_API_KEY="sk-or-v1-..."
