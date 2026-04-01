@@ -1,0 +1,23 @@
+{
+  "name": "konceptos-cli",
+  "version": "0.9.1",
+  "description": "K -> K* by vocabulary replacement + redescription. FCA-based concept evolution CLI.",
+  "main": "src/index.js",
+  "bin": {
+    "konceptos": "./bin/cli.js"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "node bin/cli.js"
+  },
+  "keywords": [
+    "fca",
+    "concept-analysis",
+    "cli"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.3",
+    "node-fetch": "^3.3.2"
+  }
+}

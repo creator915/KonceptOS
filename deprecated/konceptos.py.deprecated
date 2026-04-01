@@ -18,9 +18,10 @@ They are injected into LLM prompts during build/resolve.
 import json,sys,re,time
 from pathlib import Path
 
-OPENROUTER_API_KEY = ""
-OPENROUTER_MODEL = "anthropic/claude-opus-4.6"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+import os
+OPENROUTER_API_KEY = os.environ.get("KONCEPTOS_API_KEY", "")
+OPENROUTER_MODEL = os.environ.get("KONCEPTOS_MODEL", "glm-5")
+OPENROUTER_URL = os.environ.get("KONCEPTOS_URL", "https://open.bigmodel.cn/api/paas/v4/chat/completions")
 VALID_I = {'0','R','W','RW'}
 
 def _ansi():
