@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>斗地主 (Dou Di Zhu) - Fight the Landlord</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a5c2a; font-family: Arial, sans-serif; overflow: hidden; }
+canvas { display: block; margin: 0 auto; }
+#game-container { position: relative; width: 1200px; height: 800px; margin: 0 auto; }
+canvas { position: absolute; top: 0; left: 0; }
+#ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+.btn { pointer-events: all; padding: 10px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-play { background: #e8b530; color: #333; }
+.btn-play:hover:not(:disabled) { background: #f0c850; }
+.btn-pass { background: #888; color: #fff; }
+.btn-pass:hover:not(:disabled) { background: #999; }
+.btn-hint { background: #4a90d9; color: #fff; }
+.btn-hint:hover:not(:disabled) { background: #5aa0e9; }
+.btn-bid { background: #e8b530; color: #333; margin: 0 5px; }
+.btn-bid:hover:not(:disabled) { background: #f0c850; }
+#button-bar { position: absolute; bottom: 200px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; pointer-events: all; }
+#bid-bar { position: absolute; bottom: 200px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; pointer-events: all; display: none; }
+#status-bar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 18px; font-weight: bold; text-shadow: 1px 1px 3px rgba(0,0,0,0.7); pointer-events: none; }
+#result-dialog { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); color: #fff; padding: 40px 60px; border-radius: 16px; text-align: center; display: none; pointer-events: all; z-index: 100; border: 2px solid #e8b530; }
+#result-dialog h2 { font-size: 32px; margin-bottom: 16px; }
+#result-dialog p { font-size: 18px; margin-bottom: 24px; }
+#restart-btn { background: #e8b530; color: #333; padding: 12px 36px; font-size: 18px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+#restart-btn:hover { background: #f0c850; }
+#ai1-label { position: absolute; top: 80px; left: 30px; color: #fff; font-size: 14px; font-weight: bold; pointer-events: none; }
+#ai2-label { position: absolute; top: 80px; right: 30px; color: #fff; font-size: 14px; font-weight: bold; pointer-events: none; }
+#ai1-count { position: absolute; top: 100px; left: 30px; color: #ffd700; font-size: 24px; font-weight: bold; pointer-events: none; }
+#ai2-count { position: absolute; top: 100px; right: 30px; color: #ffd700; font-size: 24px; font-weight: bold; pointer-events: none; }
+#ai1-play-area { position: absolute; top: 200px; left: 100px; color: #fff; font-size: 14px; pointer-events: none; text-align: center; }
+#ai2-play-area { position: absolute; top: 200px; right: 100px; color: #fff; font-size: 14px; pointer-events: none; text-align: center; }
+#bonus-cards-area { position: absolute; top: 10px; right: 10px; color: #ffd700; font-size: 12px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="game-container">
+<canvas id="gameCanvas" width="1200" height="800"></canvas>
+<div id="ui-overlay">
+<div id="status-bar">斗地主 - Fight the Landlord</div>
+<div id="ai1-label">AI Player 1</div>
+<div id="ai2-label">AI Player 2</div>
+<div id="ai1-count" data-testid="ai1-count">17</div>
+<div id="ai2-count" data-testid="ai2-count">17</div>
+<div id="ai1-play-area" data-testid="ai1-play"></div>
+<div id="ai2-play-area" data-testid="ai2-play"></div>
+<div id="bonus-cards-area" data-testid="bonus-cards"></div>
+<div id="button-bar">
+<button class="btn btn-play" id="play-btn" data-testid="play-btn" disabled>Play</button>
+<button class="btn btn-pass" id="pass-btn" data-testid="pass-btn" disabled>Pass</button>
+<button class="btn btn-hint" id="hint-btn" data-testid="hint-btn" disabled>Hint</button>
+</div>
+<div id="bid-bar">
+<button class="btn btn-bid" id="bid-1-btn" data-testid="bid-1">Bid 1</button>
+<button class="btn btn-bid" id="bid-2-btn" data-testid="bid-2">Bid 2</button>
+<button class="btn btn-bid" id="bid-3-btn" data-testid="bid-3">Bid 3</button>
+<button class="btn btn-bid" id="no-bid-btn" data-testid="no-bid">No Bid</button>
+</div>
+<div id="result-dialog" data-testid="result-dialog">
+<h2 id="result-title"></h2>
+<p id="result-message"></p>
+<button id="restart-btn" data-testid="restart-btn">Play Again</button>
+</div>
+</div>
+</div>
+
+<script>
+// ==================== GAME STATE ====================
+const GameState = {
+    // Attributes
+    deck_cards: [],          // A
+    player_hand: [],         // B
+    ai_hands: { ai1: [], ai2: [] }, // C
+    landlord_role: { player: null, bonusCards: [] }, // D
+    selected_cards: [],      // E
+    current_play: null,      // F
+    pattern_result: { pattern: '', valid: false, comparison: null }, // G
+    active_turn: { player: 'human', phase: 'dealing' }, // H
+    ai_remaining_count: { ai1: 17, ai2: 17 }, // I
+    hint_suggestion: null,   // J
+    game_result: null,       // K
+    button_actions: { action: 'play', enabled: { play: false, pass: false, hint: false } }, // L
+    
+    // Extra state
+    bid_history: [],
+    current_bid_player: 'human',
+    highest_bid: 0,
+    highest_bidder: null,
+    pass_count: { human: 0, ai1: 0, ai2: 0 },
+    consecutive_passes: 0,
+    round_starter: null,
+    multiplier: 1,
+    ai1_last_play: null,
+    ai2_last_play: null,
+    human_last_play: null,
+};
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ==================== CARD DEFINITIONS ====================
+const SUITS = ['♠', '♥', '♦', '♣'];
+const SUIT_COLORS = { '♠': '#000', '♥': '#e33', '♦': '#e33', '♣': '#000', '🃏': '#e33', '★': '#000' };
+const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
+const RANK_VALUES = {};
+RANKS.forEach((r, i) => RANK_VALUES[r] = i + 3);
+RANK_VALUES['SmallJoker'] = 16;
+RANK_VALUES['BigJoker'] = 17;
+
+const CARD_WIDTH = 56;
+const CARD_HEIGHT = 80;
+
+function createDeck() {
+    const deck = [];
+    for (const suit of SUITS) {
+        for (const rank of RANKS) {
+            deck.push({ suit, rank });
+        }
+    }
+    deck.push({ suit: '🃏', rank: 'SmallJoker' });
+    deck.push({ suit: '★', rank: 'BigJoker' });
+    return deck;
+}
+
+function shuffleDeck(deck) {
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+}
+
+function cardValue(card) {
+    return RANK_VALUES[card.rank] || 0;
+}
+
+function sortHand(hand) {
+    return hand.sort((a, b) => cardValue(b) - cardValue(a));
+}
+
+function cardKey(card) {
+    return card.suit + card.rank;
+}
+
+function cardDisplayRank(card) {
+    if (card.rank === 'SmallJoker') return 'S';
+    if (card.rank === 'BigJoker') return 'B';
+    return card.rank;
+}
+
+function cardDisplaySuit(card) {
+    if (card.rank === 'SmallJoker') return '🃏';
+    if (card.rank === 'BigJoker') return '★';
+    return card.suit;
+}
+
+// ==================== F01: DECK MANAGER ====================
+function dealCards() {
+    const deck = shuffleDeck(createDeck());
+    GameState.deck_cards = [...deck];
+    GameState.player_hand = sortHand(deck.slice(0, 17));
+    GameState.ai_hands.ai1 = sortHand(deck.slice(17, 34));
+    GameState.ai_hands.ai2 = sortHand(deck.slice(34, 51));
+    GameState.deck_cards = deck.slice(51, 54); // bonus cards
+    GameState.ai_remaining_count = { ai1: 17, ai2: 17 };
+}
+
+// ==================== BIDDING SYSTEM ====================
+function startBidding() {
+    GameState.active_turn = { player: 'human', phase: 'bidding' };
+    GameState.bid_history = [];
+    GameState.highest_bid = 0;
+    GameState.highest_bidder = null;
+    GameState.current_bid_player = 'human';
+    updateBidUI();
+}
+
+function updateBidUI() {
+    const bidBar = document.getElementById('bid-bar');
+    const buttonBar = document.getElementById('button-bar');
+    if (GameState.active_turn.phase === 'bidding' && GameState.current_bid_player === 'human') {
+        bidBar.style.display = 'flex';
+        buttonBar.style.display = 'none';
+        document.getElementById('bid-1-btn').disabled = GameState.highest_bid >= 1;
+        document.getElementById('bid-2-btn').disabled = GameState.highest_bid >= 2;
+        document.getElementById('bid-3-btn').disabled = GameState.highest_bid >= 3;
+    } else {
+        bidBar.style.display = 'none';
+    }
+}
+
+function processBid(player, bidAmount) {
+    GameState.bid_history.push({ player, bid: bidAmount });
+    if (bidAmount > GameState.highest_bid) {
+        GameState.highest_bid = bidAmount;
+        GameState.highest_bidder = player;
+    }
+    if (bidAmount === 3 || GameState.bid_history.length >= 3) {
+        resolveBidding();
+        return;
+    }
+    advanceBidTurn();
+}
+
+function advanceBidTurn() {
+    const order = ['human', 'ai1', 'ai2'];
+    const idx = order.indexOf(GameState.current_bid_player);
+    GameState.current_bid_player = order[(idx + 1) % 3];
+    GameState.active_turn.player = GameState.current_bid_player;
+    
+    if (GameState.current_bid_player !== 'human') {
+        setTimeout(() => {
+            const aiBid = Math.random() < 0.5 ? Math.min(GameState.highest_bid + 1, 3) : 0;
+            processBid(GameState.current_bid_player, aiBid);
+        }, 800);
+    }
+    updateBidUI();
+    updateStatus();
+}
+
+function resolveBidding() {
+    let landlord = GameState.highest_bidder;
+    if (!landlord) {
+        // fallback_random_assigner
+        const players = ['human', 'ai1', 'ai2'];
+        landlord = players[Math.floor(Math.random() * 3)];
+    }
+    
+    GameState.multiplier = Math.max(GameState.highest_bid, 1);
+    GameState.landlord_role = { player: landlord, bonusCards: [...GameState.deck_cards] };
+    
+    // bonus_card_dealer - give bonus cards to landlord
+    const bonusCards = GameState.deck_cards;
+    if (landlord === 'human') {
+        GameState.player_hand.push(...bonusCards);
+        sortHand(GameState.player_hand);
+    } else if (landlord === 'ai1') {
+        GameState.ai_hands.ai1.push(...bonusCards);
+        sortHand(GameState.ai_hands.ai1);
+        GameState.ai_remaining_count.ai1 = GameState.ai_hands.ai1.length;
+    } else {
+        GameState.ai_hands.ai2.push(...bonusCards);
+        sortHand(GameState.ai_hands.ai2);
+        GameState.ai_remaining_count.ai2 = GameState.ai_hands.ai2.length;
+    }
+    
+    // game_state_transition_emitter
+    GameState.active_turn = { player: landlord, phase: 'playing' };
+    GameState.round_starter = landlord;
+    GameState.current_play = null;
+    GameState.consecutive_passes = 0;
+    
+    document.getElementById('bid-bar').style.display = 'none';
+    
+    displayBonusCards();
+    updateButtonStates();
+    updateStatus();
+    render();
+    
+    if (landlord !== 'human') {
+        setTimeout(aiTurn, 1000);
+    }
+}
+
+function displayBonusCards() {
+    const bc = GameState.landlord_role.bonusCards;
+    const area = document.getElementById('bonus-cards-area');
+    area.textContent = 'Bonus: ' + bc.map(c => cardDisplaySuit(c) + cardDisplayRank(c)).join(' ');
+}
+
+// ==================== PATTERN RECOGNITION (F04) ====================
+function classifyPattern(cards) {
+    if (!cards || cards.length === 0) return null;
+    
+    const n = cards.length;
+    const counts = {};
+    cards.forEach(c => {
+        const v = cardValue(c);
+        counts[v] = (counts[v] || 0) + 1;
+    });
+    const values = Object.keys(counts).map(Number).sort((a, b) => a - b);
+    const countValues = Object.values(counts);
+    
+    // Rocket (both jokers)
+    if (n === 2 && cards.some(c => c.rank === 'SmallJoker') && cards.some(c => c.rank === 'BigJoker')) {
+        return { pattern: 'rocket', rank: 99, length: 2 };
+    }
+    
+    // Single
+    if (n === 1) return { pattern: 'single', rank: cardValue(cards[0]), length: 1 };
+    
+    // Pair
+    if (n === 2 && countValues[0] === 2) return { pattern: 'pair', rank: values[0], length: 2 };
+    
+    // Triple
+    if (n === 3 && countValues[0] === 3) return { pattern: 'triple', rank: values[0], length: 3 };
+    
+    // Bomb (4 same)
+    if (n === 4 && countValues.length === 1 && countValues[0] === 4) {
+        return { pattern: 'bomb', rank: values[0], length: 4 };
+    }
+    
+    // Triple + 1
+    if (n === 4 && countValues.length === 2) {
+        const tripleVal = values.find(v => counts[v] === 3);
+        if (tripleVal !== undefined) return { pattern: 'triple_one', rank: tripleVal, length: 4 };
+    }
+    
+    // Triple + 2
+    if (n === 5 && countValues.length === 2) {
+        const tripleVal = values.find(v => counts[v] === 3);
+        const pairVal = values.find(v => counts[v] === 2);
+        if (tripleVal !== undefined && pairVal !== undefined) return { pattern: 'triple_two', rank: tripleVal, length: 5 };
+    }
+    
+    // Straight (5+ consecutive singles, no 2 or jokers)
+    if (n >= 5 && countValues.every(c => c === 1)) {
+        if (values.every(v => v < 15) && isConsecutive(values) && values.length >= 5) {
+            return { pattern: 'straight', rank: values[values.length - 1], length: n };
+        }
+    }
+    
+    // Consecutive pairs (3+ pairs)
+    if (n >= 6 && n % 2 === 0 && countValues.every(c => c === 2)) {
+        if (values.every(v => v < 15) && isConsecutive(values) && values.length >= 3) {
+            return { pattern: 'consecutive_pairs', rank: values[values.length - 1], length: n };
+        }
+    }
+    
+    // Airplane (2+ consecutive triples)
+    const triples = values.filter(v => counts[v] === 3).sort((a, b) => a - b);
+    if (triples.length >= 2 && triples.every(v => v < 15) && isConsecutive(triples)) {
+        const remaining = n - triples.length * 3;
+        if (remaining === 0) return { pattern: 'airplane', rank: triples[triples.length - 1], length: n };
+        if (remaining === triples.length) return { pattern: 'airplane_single', rank: triples[triples.length - 1], length: n };
+        if (remaining === triples.length * 2) return { pattern: 'airplane_pair', rank: triples[triples.length - 1], length: n };
+    }
+    
+    // Four + 2 singles
+    if (n === 6) {
+        const fourVal = values.find(v => counts[v] === 4);
+        if (fourVal !== undefined) return { pattern: 'four_two', rank: fourVal, length: 6 };
+    }
+    
+    return null;
+}
+
+function isConsecutive(sortedValues) {
+    for (let i = 1; i < sortedValues.length; i++) {
+        if (sortedValues[i] - sortedValues[i - 1] !== 1) return false;
+    }
+    return true;
+}
+
+function comparePlay(newCards, currentPlay) {
+    if (!currentPlay) return { pattern: '', valid: true, comparison: 'bigger' };
+    
+    const newPattern = classifyPattern(newCards);
+    if (!newPattern) return { pattern: '', valid: false, comparison: null };
+    
+    // Rocket beats everything
+    if (newPattern.pattern === 'rocket') return { pattern: 'rocket', valid: true, comparison: 'bigger' };
+    
+    // Bomb beats non-bomb
+    if (newPattern.pattern === 'bomb' && currentPlay.pattern !== 'bomb' && currentPlay.pattern !== 'rocket') {
+        return { pattern: 'bomb', valid: true, comparison: 'bigger' };
+    }
+    
+    // Same pattern type and length
+    if (newPattern.pattern === currentPlay.pattern && newCards.length === currentPlay.cards.length) {
+        if (newPattern.rank > currentPlay.rank) {
+            return { pattern: newPattern.pattern, valid: true, comparison: 'bigger' };
+        }
+    }
+    
+    return { pattern: newPattern.pattern, valid: false, comparison: 'smaller' };
+}
+
+// ==================== AI LOGIC (F06) ====================
+function findValidMoves(hand, currentPlay) {
+    const moves = [];
+    
+    if (!currentPlay) {
+        // Free play - find all possible patterns
+        // Singles
+        const seen = new Set();
+        for (const card of hand) {
+            const v = cardValue(card);
+            if (!seen.has(v)) {
+                seen.add(v);
+                moves.push([card]);
+            }
+        }
+        // Pairs
+        const counts = {};
+        hand.forEach(c => {
+            const v = cardValue(c);
+            if (!counts[v]) counts[v] = [];
+            counts[v].push(c);
+        });
+        for (const v in counts) {
+            if (counts[v].length >= 2) moves.push(counts[v].slice(0, 2));
+            if (counts[v].length >= 3) moves.push(counts[v].slice(0, 3));
+            if (counts[v].length >= 3) {
+                // triple + kicker
+                for (const card of hand) {
+                    if (cardValue(card) !== parseInt(v)) {
+                        moves.push([...counts[v].slice(0, 3), card]);
+                        break;
+                    }
+                }
+            }
+            if (counts[v].length === 4) moves.push(counts[v].slice(0, 4)); // bomb
+        }
+        // Rocket
+        const sj = hand.find(c => c.rank === 'SmallJoker');
+        const bj = hand.find(c => c.rank === 'BigJoker');
+        if (sj && bj) moves.push([sj, bj]);
+        
+        return moves.sort((a, b) => {
+            const pa = classifyPattern(a);
+            const pb = classifyPattern(b);
+            if (!pa) return 1;
+            if (!pb) return -1;
+            return pa.rank - pb.rank;
+        });
+    }
+    
+    // Must beat current play
+    const cp = currentPlay;
+    const counts = {};
+    hand.forEach(c => {
+        const v = cardValue(c);
+        if (!counts[v]) counts[v] = [];
+        counts[v].push(c);
+    });
+    
+    if (cp.pattern === 'single') {
+        for (const card of hand) {
+            if (cardValue(card) > cp.rank) moves.push([card]);
+        }
+    } else if (cp.pattern === 'pair') {
+        for (const v in counts) {
+            if (counts[v].length >= 2 && parseInt(v) > cp.rank) {
+                moves.push(counts[v].slice(0, 2));
+            }
+        }
+    } else if (cp.pattern === 'triple' || cp.pattern === 'triple_one' || cp.pattern === 'triple_two') {
+        for (const v in counts) {
+            if (counts[v].length >= 3 && parseInt(v) > cp.rank) {
+                const triple = counts[v].slice(0, 3);
+                if (cp.pattern === 'triple') {
+                    moves.push(triple);
+                } else if (cp.pattern === 'triple_one') {
+                    for (const card of hand) {
+                        if (cardValue(card) !== parseInt(v)) {
+                            moves.push([...triple, card]);
+                            break;
+                        }
+                    }
+                } else {
+                    // triple_two - find a pair kicker
+                    for (const v2 in counts) {
+                        if (v2 !== v && counts[v2].length >= 2) {
+                            moves.push([...triple, ...counts[v2].slice(0, 2)]);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    } else if (cp.pattern === 'bomb') {
+        for (const v in counts) {
+            if (counts[v].length === 4 && parseInt(v) > cp.rank) {
+                moves.push(counts[v]);
+            }
+        }
+    }
+    
+    // Always check for bombs and rockets as override
+    if (cp.pattern !== 'bomb' && cp.pattern !== 'rocket') {
+        for (const v in counts) {
+            if (counts[v].length === 4) moves.push(counts[v]);
+        }
+    }
+    const sj = hand.find(c => c.rank === 'SmallJoker');
+    const bj = hand.find(c => c.rank === 'BigJoker');
+    if (sj && bj) moves.push([sj, bj]);
+    
+    // Deduplicate and filter valid
+    const validMoves = [];
+    const seenKeys = new Set();
+    for (const move of moves) {
+        const key = move.map(cardKey).sort().join(',');
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        const result = comparePlay(move, currentPlay);
+        if (result.valid && result.comparison === 'bigger') {
+            validMoves.push(move);
+        }
+    }
+    
+    return validMoves.sort((a, b) => {
+        const pa = classifyPattern(a);
+        const pb = classifyPattern(b);
+        if (!pa) return 1;
+        if (!pb) return -1;
+        if (pa.pattern === 'bomb' || pa.pattern === 'rocket') return 1;
+        if (pb.pattern === 'bomb' || pb.pattern === 'rocket') return -1;
+        return pa.rank - pb.rank;
+    });
+}
+
+function aiDecidePlay(player) {
+    const hand = GameState.ai_hands[player];
+    const currentPlay = (GameState.round_starter === player) ? null : GameState.current_play;
+    const validMoves = findValidMoves(hand, currentPlay);
+    
+    if (validMoves.length === 0) return null;
+    
+    // Simple AI: play smallest valid move, but consider bombs strategically
+    const nonBombs = validMoves.filter(m => {
+        const p = classifyPattern(m);
+        return p && p.pattern !== 'bomb' && p.pattern !== 'rocket';
+    });
+    
+    if (nonBombs.length > 0) return nonBombs[0];
+    
+    // Only bombs left - use if opponent has few cards
+    const opponentCounts = player === 'ai1' ? 
+        [GameState.player_hand.length, GameState.ai_hands.ai2.length] :
+        [GameState.player_hand.length, GameState.ai_hands.ai1.length];
+    
+    if (opponentCounts.some(c => c <= 4)) return validMoves[0];
+    if (hand.length <= 6) return validMoves[0];
+    
+    return null; // pass instead of wasting bomb
+}
+
+function aiTurn() {
+    if (GameState.active_turn.phase !== 'playing') return;
+    if (GameState.game_result) return;
+    
+    const player = GameState.active_turn.player;
+    if (player === 'human') {
+        updateButtonStates();
+        return;
+    }
+    
+    const decision = aiDecidePlay(player);
+    
+    if (decision) {
+        // Play cards
+        removeCardsFromHand(player, decision);
+        const pattern = classifyPattern(decision);
+        GameState.current_play = {
+            cards: decision,
+            pattern: pattern.pattern,
+            rank: pattern.rank,
+            player: player
+        };
+        GameState.consecutive_passes = 0;
+        GameState.round_starter = null;
+        
+        if (player === 'ai1') {
+            GameState.ai1_last_play = decision;
+            GameState.ai2_last_play = null;
+        } else {
+            GameState.ai2_last_play = decision;
+            GameState.ai1_last_play = null;
+        }
+        GameState.human_last_play = null;
+        
+        updateAICount();
+        
+        // Check win
+        if (checkWin(player)) return;
+    } else {
+        GameState.consecutive_passes++;
+        if (player === 'ai1') GameState.ai1_last_play = 'pass';
+        else GameState.ai2_last_play = 'pass';
+        GameState.human_last_play = null;
+        
+        if (GameState.consecutive_passes >= 2) {
+            GameState.current_play = null;
+            GameState.round_starter = GameState.active_turn.player;
+            // Actually the round_starter should be the last player who played
+            // Fix: find who last played
+            const lastPlayer = GameState.current_play ? GameState.current_play.player : getNextPlayer(player);
+            GameState.round_starter = getNextPlayer(player);
+            GameState.consecutive_passes = 0;
+        }
+    }
+    
+    advanceTurn();
+    render();
+    updateStatus();
+    
+    if (GameState.active_turn.player !== 'human') {
+        setTimeout(aiTurn, 1000);
+    } else {
+        updateButtonStates();
+    }
+}
+
+function removeCardsFromHand(player, cards) {
+    const cardKeys = new Set(cards.map(cardKey));
+    if (player === 'human') {
+        GameState.player_hand = GameState.player_hand.filter(c => !cardKeys.has(cardKey(c)));
+    } else {
+        GameState.ai_hands[player] = GameState.ai_hands[player].filter(c => !cardKeys.has(cardKey(c)));
+    }
+}
+
+function updateAICount() {
+    GameState.ai_remaining_count = {
+        ai1: GameState.ai_hands.ai1.length,
+        ai2: GameState.ai_hands.ai2.length
+    };
+    document.getElementById('ai1-count').textContent = GameState.ai_remaining_count.ai1;
+    document.getElementById('ai2-count').textContent = GameState.ai_remaining_count.ai2;
+}
+
+function getNextPlayer(current) {
+    const order = ['human', 'ai1', 'ai2'];
+    const idx = order.indexOf(current);
+    return order[(idx + 1) % 3];
+}
+
+function advanceTurn() {
+    const next = getNextPlayer(GameState.active_turn.player);
+    GameState.active_turn.player = next;
+}
+
+// ==================== WIN DETECTION (F07) ====================
+function checkWin(player) {
+    let handEmpty = false;
+    if (player === 'human') handEmpty = GameState.player_hand.length === 0;
+    else handEmpty = GameState.ai_hands[player].length === 0;
+    
+    if (handEmpty) {
+        const landlord = GameState.landlord_role.player;
+        const winner = (player === landlord) ? 'landlord' : 'farmers';
+        GameState.game_result = { winner, landlord };
+        GameState.active_turn.phase = 'ended';
+        showResult();
+        return true;
+    }
+    return false;
+}
+
+function showResult() {
+    const dialog = document.getElementById('result-dialog');
+    const title = document.getElementById('result-title');
+    const message = document.getElementById('result-message');
+    
+    const isHumanLandlord = GameState.landlord_role.player === 'human';
+    const landlordWon = GameState.game_result.winner === 'landlord';
+    const humanWon = (isHumanLandlord && landlordWon) || (!isHumanLandlord && !landlordWon);
+    
+    title.textContent = humanWon ? '🎉 You Win!' : '😢 You Lose!';
+    message.textContent = `${GameState.game_result.winner === 'landlord' ? 'Landlord' : 'Farmers'} won! ` +
+        `(Landlord: ${GameState.landlord_role.player === 'human' ? 'You' : GameState.landlord_role.player.toUpperCase()})` +
+        ` | Multiplier: ${GameState.multiplier}x`;
+    
+    dialog.style.display = 'block';
+    render();
+}
+
+// ==================== PLAYER INPUT (F05) ====================
+function handleCanvasClick(e) {
+    if (GameState.active_turn.phase !== 'playing') return;
+    if (GameState.active_turn.player !== 'human') return;
+    if (GameState.game_result) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Check if clicked on a card in hand
+    const hand = GameState.player_hand;
+    const totalWidth = Math.min((hand.length - 1) * 35 + CARD_WIDTH, 1100);
+    const startX = (1200 - totalWidth) / 2;
+    const cardSpacing = hand.length > 1 ? Math.min(35, (totalWidth - CARD_WIDTH) / (hand.length - 1)) : 0;
+    const baseY = 680;
+    
+    // Check from right to left (top cards first)
+    for (let i = hand.length - 1; i >= 0; i--) {
+        const card = hand[i];
+        const isSelected = GameState.selected_cards.some(s => cardKey(s) === cardKey(card));
+        const cardX = startX + i * cardSpacing;
+        const cardY = isSelected ? baseY - 20 : baseY;
+        const cardRight = (i === hand.length - 1) ? cardX + CARD_WIDTH : cardX + cardSpacing;
+        
+        if (x >= cardX && x <= cardX + CARD_WIDTH && y >= cardY && y <= cardY + CARD_HEIGHT) {
+            // Toggle selection
+            if (isSelected) {
+                GameState.selected_cards = GameState.selected_cards.filter(s => cardKey(s) !== cardKey(card));
+            } else {
+                GameState.selected_cards.push(card);
+            }
+            updateButtonStates();
+            render();
+            return;
+        }
+    }
+}
+
+canvas.addEventListener('click', handleCanvasClick);
+
+function updateButtonStates() {
+    const isHumanTurn = GameState.active_turn.player === 'human' && GameState.active_turn.phase === 'playing';
+    const hasSelection = GameState.selected_cards.length > 0;
+    
+    const canPass = isHumanTurn && GameState.round_starter !== 'human' && GameState.current_play !== null;
+    
+    let canPlay = false;
+    if (isHumanTurn && hasSelection) {
+        const pattern = classifyPattern(GameState.selected_cards);
+        if (pattern) {
+            if (!GameState.current_play || GameState.round_starter === 'human') {
+                canPlay = true;
+            } else {
+                const result = comparePlay(GameState.selected_cards, GameState.current_play);
+                canPlay = result.valid && result.comparison === 'bigger';
+            }
+        }
+    }
+    
+    GameState.button_actions = {
+        action: 'play',
+        enabled: {
+            play: canPlay,
+            pass: canPass,
+            hint: isHumanTurn
+        }
+    };
+    
+    document.getElementById('play-btn').disabled = !canPlay;
+    document.getElementById('pass-btn').disabled = !canPass;
+    document.getElementById('hint-btn').disabled = !isHumanTurn;
+    
+    document.getElementById('button-bar').style.display = isHumanTurn ? 'flex' : 'none';
+}
+
+document.getElementById('play-btn').addEventListener('click', () => {
+    if (!GameState.button_actions.enabled.play) return;
+    
+    const cards = [...GameState.selected_cards];
+    const pattern = classifyPattern(cards);
+    
+    removeCardsFromHand('human', cards);
+    GameState.current_play = {
+        cards: cards,
+        pattern: pattern.pattern,
+        rank: pattern.rank,
+        player: 'human'
+    };
+    GameState.selected_cards = [];
+    GameState.consecutive_passes = 0;
+    GameState.round_starter = null;
+    GameState.human_last_play = cards;
+    GameState.ai1_last_play = null;
+    GameState.ai2_last_play = null;
+    
+    if (checkWin('human')) { render(); return; }
+    
+    advanceTurn();
+    updateButtonStates();
+    render();
+    updateStatus();
+    
+    if (GameState.active_turn.player !== 'human') {
+        setTimeout(aiTurn, 1000);
+    }
+});
+
+document.getElementById('pass-btn').addEventListener('click', () => {
+    if (!GameState.button_actions.enabled.pass) return;
+    
+    GameState.selected_cards = [];
+    GameState.consecutive_passes++;
+    GameState.human_last_play = 'pass';
+    GameState.ai1_last_play = null;
+    GameState.ai2_last_play = null;
+    
+    if (GameState.consecutive_passes >= 2) {
+        GameState.round_starter = GameState.current_play ? GameState.current_play.player : getNextPlayer('human');
+        GameState.current_play = null;
+        GameState.consecutive_passes = 0;
+    }
+    
+    advanceTurn();
+    updateButtonStates();
+    render();
+    updateStatus();
+    
+    if (GameState.active_turn.player !== 'human') {
+        setTimeout(aiTurn, 1000);
+    }
+});
+
+document.getElementById('hint-btn').addEventListener('click', () => {
+    if (!GameState.button_actions.enabled.hint) return;
+    
+    const currentPlay = (GameState.round_starter === 'human') ? null : GameState.current_play;
+    const validMoves = findValidMoves(GameState.player_hand, currentPlay);
+    
+    if (validMoves.length > 0) {
+        // Cycle through hints
+        const currentHintKey = GameState.selected_cards.map(cardKey).sort().join(',');
+        let nextIdx = 0;
+        for (let i = 0; i < validMoves.length; i++) {
+            const moveKey = validMoves[i].map(cardKey).sort().join(',');
+            if (moveKey === currentHintKey && i + 1 < validMoves.length) {
+                nextIdx = i + 1;
+                break;
+            }
+        }
+        GameState.hint_suggestion = validMoves[nextIdx];
+        GameState.selected_cards = [...validMoves[nextIdx]];
+    } else {
+        GameState.hint_suggestion = null;
+        GameState.selected_cards = [];
+    }
+    
+    updateButtonStates();
+    render();
+});
+
+document.getElementById('restart-btn').addEventListener('click', () => {
+    document.getElementById('result-dialog').style.display = 'none';
+    initGame();
+});
+
+// Bid buttons
+document.getElementById('bid-1-btn').addEventListener('click', () => processBid('human', 1));
+document.getElementById('bid-2-btn').addEventListener('click', () => processBid('human', 2));
+document.getElementById('bid-3-btn').addEventListener('click', () => processBid('human', 3));
+document.getElementById('no-bid-btn').addEventListener('click', () => processBid('human', 0));
+
+// ==================== UI RENDERER (F08) ====================
+function render() {
+    ctx.clearRect(0, 0, 1200, 800);
+    
+    // Background
+    ctx.fillStyle = '#1a5c2a';
+    ctx.fillRect(0, 0, 1200, 800);
+    
+    // Table felt
+    ctx.beginPath();
+    ctx.ellipse(600, 380, 480, 250, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#1e6b32';
+    ctx.fill();
+    ctx.strokeStyle = '#c9a55a';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    
+    // AI1 card backs (left)
+    drawAICards('ai1', 50, 150);
+    
+    // AI2 card backs (right)
+    drawAICards('ai2', 1020, 150);
+    
+    // Current play area
+    drawCurrentPlay();
+    
+    // AI last plays
+    drawAILastPlay('ai1', 250, 250);
+    drawAILastPlay('ai2', 750, 250);
+    
+    // Human last play indicator
+    if (GameState.human_last_play === 'pass') {
+        ctx.fillStyle = '#fff';
+        ctx.font = '18px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Pass', 600, 550);
+    }
+    
+    // Player hand
+    drawPlayerHand();
+    
+    // Landlord indicator
+    drawLandlordIndicator();
+    
+    // Turn indicator
+    drawTurnIndicator();
+}
+
+function drawCardFace(x, y, card, highlighted) {
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(x + 2, y + 2, CARD_WIDTH, CARD_HEIGHT);
+    
+    // Card body
+    ctx.fillStyle = highlighted ? '#fffde0' : '#fff';
+    ctx.strokeStyle = highlighted ? '#e8b530' : '#999';
+    ctx.lineWidth = highlighted ? 2 : 1;
+    ctx.beginPath();
+    ctx.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 4);
+    ctx.fill();
+    ctx.stroke();
+    
+    const color = SUIT_COLORS[card.suit] || '#000';
+    ctx.fillStyle = color;
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(cardDisplayRank(card), x + 4, y + 18);
+    ctx.font = '14px Arial';
+    ctx.fillText(cardDisplaySuit(card), x + 4, y + 34);
+    
+    // Center rank
+    ctx.font = 'bold 22px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(cardDisplayRank(card), x + CARD_WIDTH / 2, y + CARD_HEIGHT / 2 + 8);
+}
+
+function drawCardBack(x, y) {
+    ctx.fillStyle = '#234';
+    ctx.strokeStyle = '#456';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x, y, CARD_WIDTH * 0.6, CARD_HEIGHT * 0.8, 3);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Pattern
+    ctx.fillStyle = '#345';
+    ctx.fillRect(x + 4, y + 4, CARD_WIDTH * 0.6 - 8, CARD_HEIGHT * 0.8 - 8);
+    ctx.fillStyle = '#e8b530';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('🂠', x + CARD_WIDTH * 0.3, y + CARD_HEIGHT * 0.45);
+}
+
+function drawAICards(player, x, y) {
+    const count = GameState.ai_remaining_count[player];
+    const maxShow = Math.min(count, 10);
+    for (let i = 0; i < maxShow; i++) {
+        drawCardBack(x, y + i * 8);
+    }
+}
+
+function drawPlayerHand() {
+    const hand = GameState.player_hand;
+    if (hand.length === 0) return;
+    
+    const totalWidth = Math.min((hand.length - 1) * 35 + CARD_WIDTH, 1100);
+    const startX = (1200 - totalWidth) / 2;
+    const cardSpacing = hand.length > 1 ? Math.min(35, (totalWidth - CARD_WIDTH) / (hand.length - 1)) : 0;
+    const baseY = 680;
+    
+    for (let i = 0; i < hand.length; i++) {
+        const card = hand[i];
+        const isSelected = GameState.selected_cards.some(s => cardKey(s) === cardKey(card));
+        const isHint = GameState.hint_suggestion && GameState.hint_suggestion.some(s => cardKey(s) === cardKey(card));
+        const cardY = isSelected ? baseY - 20 : baseY;
+        drawCardFace(startX + i * cardSpacing, cardY, card, isSelected || isHint);
+    }
+}
+
+function drawCurrentPlay() {
+    if (!GameState.current_play) return;
+    
+    const cards = GameState.current_play.cards;
+    const startX = 600 - (cards.length * 30) / 2;
+    
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${GameState.current_play.player.toUpperCase()} played: ${GameState.current_play.pattern}`, 600, 370);
+    
+    for (let i = 0; i < cards.length; i++) {
+        drawCardFace(startX + i * 30, 380, cards[i], false);
+    }
+}
+
+function drawAILastPlay(player, x, y) {
+    const lastPlay = player === 'ai1' ? GameState.ai1_last_play : GameState.ai2_last_play;
+    if (!lastPlay) return;
+    
+    if (lastPlay === 'pass') {
+        ctx.fillStyle = '#fff';
+        ctx.font = '18px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Pass', x + 40, y + 40);
+    } else if (Array.isArray(lastPlay)) {
+        for (let i = 0; i < lastPlay.length; i++) {
+            drawCardFace(x + i * 25, y, lastPlay[i], false);
+        }
+    }
+}
+
+function drawLandlordIndicator() {
+    if (!GameState.landlord_role.player) return;
+    
+    const positions = {
+        'human': { x: 600, y: 650 },
+        'ai1': { x: 80, y: 130 },
+        'ai2': { x: 1120, y: 130 }
+    };
+    
+    const pos = positions[GameState.landlord_role.player];
+    ctx.fillStyle = '#e8b530';
+    ctx.font = 'bold 20px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('👑 Landlord', pos.x, pos.y);
+}
+
+function drawTurnIndicator() {
+    if (GameState.active_turn.phase !== 'playing') return;
+    
+    const positions = {
+        'human': { x: 600, y: 620 },
+        'ai1': { x: 80, y: 300 },
+        'ai2': { x: 1120, y: 300 }
+    };
+    
+    const pos = positions[GameState.active_turn.player];
+    ctx.fillStyle = '#5f5';
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('◆ Current Turn', pos.x, pos.y);
+}
+
+function updateStatus() {
+    const status = document.getElementById('status-bar');
+    const phase = GameState.active_turn.phase;
+    
+    if (phase === 'bidding') {
+        status.textContent = `Bidding Phase - ${GameState.current_bid_player === 'human' ? 'Your' : GameState.current_bid_player.toUpperCase() + "'s"} turn to bid`;
+    } else if (phase === 'playing') {
+        const landlord = GameState.landlord_role.player;
+        const turnPlayer = GameState.active_turn.player;
+        status.textContent = `Playing | Landlord: ${landlord === 'human' ? 'You' : landlord.toUpperCase()} | ` +
+            `Turn: ${turnPlayer === 'human' ? 'Your turn' : turnPlayer.toUpperCase()} | ` +
+            `Multiplier: ${GameState.multiplier}x`;
+    } else if (phase === 'ended') {
+        status.textContent = 'Game Over!';
+    } else {
+        status.textContent = '斗地主 - Fight the Landlord';
+    }
+}
+
+// ==================== ROUNDRECT POLYFILL ====================
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+        if (typeof r === 'number') r = [r, r, r, r];
+        this.moveTo(x + r[0], y);
+        this.lineTo(x + w - r[1], y);
+        this.arcTo(x + w, y, x + w, y + r[1], r[1]);
+        this.lineTo(x + w, y + h - r[2]);
+        this.arcTo(x + w, y + h, x + w - r[2], y + h, r[2]);
+        this.lineTo(x + r[3], y + h);
+        this.arcTo(x, y + h, x, y + h - r[3], r[3]);
+        this.lineTo(x, y + r[0]);
+        this.arcTo(x, y, x + r[0], y, r[0]);
+        this.closePath();
+        return this;
+    };
+}
+
+// ==================== GAME INIT ====================
+function initGame() {
+    // Reset state
+    GameState.deck_cards = [];
+    GameState.player_hand = [];
+    GameState.ai_hands = { ai1: [], ai2: [] };
+    GameState.landlord_role = { player: null, bonusCards: [] };
+    GameState.selected_cards = [];
+    GameState.current_play = null;
+    GameState.pattern_result = { pattern: '', valid: false, comparison: null };
+    GameState.active_turn = { player: 'human', phase: 'dealing' };
+    GameState.ai_remaining_count = { ai1: 17, ai2: 17 };
+    GameState.hint_suggestion = null;
+    GameState.game_result = null;
+    GameState.button_actions = { action: 'play', enabled: { play: false, pass: false, hint: false } };
+    GameState.bid_history = [];
+    GameState.consecutive_passes = 0;
+    GameState.round_starter = null;
+    GameState.multiplier = 1;
+    GameState.ai1_last_play = null;
+    GameState.ai2_last_play = null;
+    GameState.human_last_play = null;
+    
+    document.getElementById('result-dialog').style.display = 'none';
+    document.getElementById('bonus-cards-area').textContent = '';
+    
+    dealCards();
+    
+    document.getElementById('ai1-count').textContent = GameState.ai_remaining_count.ai1;
+    document.getElementById('ai2-count').textContent = GameState.ai_remaining_count.ai2;
+    
+    render();
+    startBidding();
+    updateStatus();
+}
+
+// Expose state for testing
+window.GameState = GameState;
+window.classifyPattern = classifyPattern;
+window.comparePlay = comparePlay;
+window.initGame = initGame;
+
+// Start the game
+initGame();
+</script>
+</body>
+</html>

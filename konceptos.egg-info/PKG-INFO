@@ -1,0 +1,96 @@
+Metadata-Version: 2.4
+Name: konceptos
+Version: 2.1
+Summary: KonceptOS — FCA-based AI code generation framework
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: click
+Dynamic: license-file
+
+# KonceptOS
+
+**Formal Concept Analysis as a Development Operating System**
+
+K = (G, M, I) where G = modules, M = data channels, I : G × M → {0, R, W, RW}.
+
+All I values are hypotheses. Refine RW → R/W/0. This IS program design.
+
+## What it does
+
+KonceptOS extracts a formal structure (K) from requirements, then uses that structure to:
+- Generate runtime framework code mechanically from K
+- Guide LLM to implement modules one at a time, constrained by contracts
+- Verify implementations against K (contract violations, multi-writer conflicts)
+- Assemble all modules into a runnable application
+
+## Quick Start
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-..."
+
+python main.py
+# or
+python -m konceptos
+
+# Load saved state
+python main.py --load state.json
+```
+
+## Workflow
+
+```
+llm analyze spec.md        → Extract K₀ from requirements
+resolve obj|attr <id>       → Refine K (split objects/attributes)
+schema auto all             → Auto-generate TypeScript schemas
+impl <module>               → LLM generates one module (with framework context)
+verify                      → Check impls against K contracts
+assemble game.html          → Mechanical assembly (no LLM)
+```
+
+## Project Structure
+
+```
+konceptos/
+  engine.py         K engine (G/M/I, FCA, DAG, resolve)
+  codegen.py        Code generation (framework.js, impl context, assemble)
+  verify.py         Verification & K feedback (contract violations, multi-writer)
+  llm.py            LLM prompt templates and API calls
+  seed.py           Pluggable prior knowledge (Seed/JsonSeed/SeedChain)
+  cli.py            REPL commands
+  util.py           Shared utilities
+main.py             Entry point
+```
+
+## Key Concepts
+
+| Concept | Meaning |
+|---------|---------|
+| G (Objects) | Modules — things that DO something |
+| M (Attributes) | Data channels — concrete data flowing between modules |
+| I (Incidence) | Who does what on which channel: 0/R/W/RW |
+| RW | Top — "might be involved, direction unknown" |
+| W | Controls — reads old value + writes new value |
+| DAG | Immutable version history, content-addressable |
+| Seed | Prior knowledge at decision points |
+
+## vs Traditional Development
+
+Traditional: dependencies implicit, interface changes require guessing impact.
+KonceptOS: all dependencies explicit in I matrix, diff mechanically lists affected modules.
+
+## vs Current AI Coding
+
+Current AI: generate → test → patch loop. No structural memory. Architecture drifts silently.
+KonceptOS: I matrix is persistent structural memory. Architecture is first-class. LLM writes code, K maintains consistency.
+
+## Documentation
+
+- [Architecture Manual](docs/architecture.md) — File responsibilities, modification guide
+- [Design Document](docs/design.md) — Theoretical foundation (17 chapters)
+- [Issue Report](docs/issues.md) — Known issues and priorities
+- [Data Channels Lesson](docs/lesson_data_channels.md) — Attributes are nouns, not verbs
+
+## License
+
+MIT
