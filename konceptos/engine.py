@@ -71,19 +71,25 @@ class Engine:
         self.conventions="";self.concepts=[];self.edges=[];self.layers=[]
         self.history=[];self.seed=JsonSeed();self.seed_chain=SeedChain()
         self.dag=DAG();self.current_node=None;self.impls={};self.dirty=False
+        self._watchers=[];self._batch=False
+
+    def _mark_dirty(self):
+        self.dirty=True
+        if not self._batch:
+            self._notify_watchers()
 
     # ── K manipulation ──
     def add_obj(self,oid,name,desc=''):
         self.objects[oid]={'name':name,'desc':desc}
         for a in self.attributes:
             if (oid,a) not in self.incidence: self.incidence[(oid,a)]='RW'
-        self._log('add_obj','%s: %s'%(oid,name));self.dirty=True
+        self._log('add_obj','%s: %s'%(oid,name));self._mark_dirty()
 
     def add_attr(self,aid,name,desc=''):
         self.attributes[aid]={'name':name,'desc':desc}
         for o in self.objects:
             if (o,aid) not in self.incidence: self.incidence[(o,aid)]='RW'
-        self._log('add_attr','%s: %s'%(aid,name));self.dirty=True
+        self._log('add_attr','%s: %s'%(aid,name));self._mark_dirty()
 
     def set_i(self,oid,aid,val):
         val=val.upper().strip()
@@ -94,22 +100,22 @@ class Engine:
         if aid not in self.attributes: raise ValueError('No attr: '+aid)
         old=self.incidence.get((oid,aid),'RW')
         self.incidence[(oid,aid)]=val
-        if old!=val: self.dirty=True
+        if old!=val: self._mark_dirty()
 
     def del_obj(self,oid):
         if oid in self.objects:
             del self.objects[oid]
-            self.incidence={k:v for k,v in self.incidence.items() if k[0]!=oid};self.dirty=True
+            self.incidence={k:v for k,v in self.incidence.items() if k[0]!=oid};self._mark_dirty()
 
     def del_attr(self,aid):
         if aid in self.attributes:
             del self.attributes[aid]
             self.incidence={k:v for k,v in self.incidence.items() if k[1]!=aid}
-            self.schemas.pop(aid,None);self.dirty=True
+            self.schemas.pop(aid,None);self._mark_dirty()
 
     def set_schema(self,aid,s):
         if aid not in self.attributes: raise ValueError('No attr: '+aid)
-        self.schemas[aid]=s;self.dirty=True
+        self.schemas[aid]=s;self._mark_dirty()
 
     # ── Queries ──
     def involved(self,o,a): return self.incidence.get((o,a),'RW') in ('R','W','RW')
@@ -296,6 +302,41 @@ class Engine:
         if self.conventions: parts.append(self.conventions)
         return '\n'.join(parts)
 
+    def interface_boundaries(self):
+        """返回接口边界信息：{inputs, outputs, schemas}
+        inputs: W 或 RW 权限的属性（外部输入）
+        outputs: R 或 RW 权限的属性（预期输出）
+        """
+        inputs = []
+        outputs = []
+        schemas = dict(self.schemas)
+
+        for aid in self.attributes:
+            an = self.attributes[aid]['name']
+            ad = self.attributes[aid].get('desc', '')
+            writers = self.writers_of(aid)
+            readers = self.readers_of(aid)
+
+            # 找出写入该属性的所有对象名
+            writer_names = [self.objects[o]['name'] for o in writers if o in self.objects]
+            reader_names = [self.objects[o]['name'] for o in readers if o in self.objects]
+
+            entry = {
+                'attr': aid,
+                'name': an,
+                'desc': ad,
+                'writers': writer_names,
+                'readers': reader_names,
+                'schema': schemas.get(aid, '')
+            }
+
+            if writer_names:
+                inputs.append(entry)
+            if reader_names:
+                outputs.append(entry)
+
+        return {'inputs': inputs, 'outputs': outputs, 'schemas': schemas}
+
     # ── Resolve ──
     def resolve(self,xid,kind,children,llm):
         """Split object or attribute. Returns list of new IDs."""
@@ -316,14 +357,14 @@ class Engine:
                     if pv=='0': self.set_i(nid,aid,'0');continue
                     h=self.seed_chain.suggest_direction(nn,nd,an,ad)
                     if h: self.set_i(nid,aid,h);continue
-                    pending.append((nid,aid,len(pairs)));pairs.append((nn,nd,an,ad))
+                    pending.append((nid,aid,len(pairs),pv));pairs.append((nn,nd,an,ad))
             if pairs and llm and llm.ok:
                 ctx="Splitting '%s' into: %s"%(self.objects.get(xid,{}).get('name',xid),
                     ', '.join(self.objects[n]['name'] for n in new_ids))
                 results=llm.judge_batch(pairs,ctx)
-                for nid,aid,idx in pending: self.set_i(nid,aid,results.get(idx,'RW'))
+                for nid,aid,idx,pv in pending: self.set_i(nid,aid,results.get(idx,pv))
             else:
-                for nid,aid,idx in pending: self.set_i(nid,aid,'RW')
+                for nid,aid,idx,pv in pending: self.set_i(nid,aid,pv)
             self.del_obj(xid)
         elif kind=='attr':
             if xid not in self.attributes: return []
@@ -343,25 +384,28 @@ class Engine:
                     nan=self.attributes[na]['name'];nad=self.attributes[na].get('desc','')
                     h=self.seed_chain.suggest_direction(on,od,nan,nad)
                     if h: self.set_i(oid,na,h);continue
-                    pending.append((oid,na,len(pairs)));pairs.append((on,od,nan,nad))
+                    pending.append((oid,na,len(pairs),pv));pairs.append((on,od,nan,nad))
             if pairs and llm and llm.ok:
                 ctx="Splitting '%s' into: %s"%(self.attributes.get(xid,{}).get('name',xid),
                     ', '.join(self.attributes[n]['name'] for n in new_ids))
                 results=llm.judge_batch(pairs,ctx)
-                for oid,na,idx in pending: self.set_i(oid,na,results.get(idx,'RW'))
+                for oid,na,idx,pv in pending: self.set_i(oid,na,results.get(idx,pv))
             else:
-                for oid,na,idx in pending: self.set_i(oid,na,'RW')
+                for oid,na,idx,pv in pending: self.set_i(oid,na,pv)
             self.del_attr(xid)
-        self.dirty=True
+        self._mark_dirty()
         return new_ids
 
     # ── DAG ops ──
     def commit(self,desc=''):
+        was_dirty=self.dirty
         node=DAGNode(self.objects,self.attributes,self.incidence,self.schemas,
                      self.conventions,self.seed.to_dict() if self.seed.has_content() else {})
         node.impls=copy.deepcopy(self.impls)
         nid=self.dag.add_node(node,self.current_node,desc)
-        self.current_node=nid;self.dirty=False;return nid
+        self.current_node=nid;self.dirty=False
+        if was_dirty: self._notify_watchers()
+        return nid
 
     def goto_node(self,nid):
         if nid not in self.dag.nodes: raise ValueError('No node: '+nid)
@@ -371,6 +415,7 @@ class Engine:
         self.conventions=n.conventions;self.impls=copy.deepcopy(n.impls)
         if n.seed_dict: self.seed.from_dict(n.seed_dict);self.seed_chain=SeedChain([self.seed])
         self.current_node=nid;self.dirty=False;self.compute()
+        self._notify_watchers()
 
     # ── Serialization ──
     def export_spec(self,fp=None):
@@ -400,6 +445,19 @@ class Engine:
     def _log(self,a,d):
         self.history.append({'time':time.strftime('%H:%M:%S'),'act':a,'detail':d})
 
+    # ── Watchers ──────────────────────────────────────────────────────────────
+    def watch(self,fn):
+        """Register a callback fn(engine) called whenever ctx changes."""
+        self._watchers.append(fn)
+
+    def unwatch(self,fn):
+        self._watchers.remove(fn)
+
+    def _notify_watchers(self):
+        for fn in self._watchers:
+            try: fn(self)
+            except Exception: pass
+
     def save_dag(self,fp):
         import json as j
         with open(fp,'w',encoding='utf-8') as f:
@@ -420,3 +478,53 @@ class Engine:
             if len(p)==2: self.incidence[(p[0],p[1])]=v if v in VALID_I else 'RW'
         if 'seed' in d: self.seed.from_dict(d['seed']);self.seed_chain=SeedChain([self.seed])
         self.compute();self.commit('imported from v0.9')
+
+    # ── Workspace auto-save ──
+    def save_workspace(self, workspace_dir='./.konceptos'):
+        """Save working state to workspace.json for auto-recovery on crash."""
+        import os
+        os.makedirs(workspace_dir, exist_ok=True)
+        inc_serial = {'%s|%s' % (o, a): v for (o, a), v in self.incidence.items()}
+        d = {
+            'objects': self.objects,
+            'attributes': self.attributes,
+            'incidence': inc_serial,
+            'schemas': self.schemas,
+            'conventions': self.conventions,
+            'impls': self.impls,
+            'seed': self.seed.to_dict() if self.seed.has_content() else {},
+            'current_node': self.current_node,
+            'dirty': self.dirty,
+            'dag': self.dag.to_dict(),
+        }
+        with open(workspace_dir + '/workspace.json', 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+
+    def load_workspace(self, workspace_dir='./.konceptos'):
+        """Load working state from workspace.json. Returns True if loaded."""
+        import os
+        fp = workspace_dir + '/workspace.json'
+        if not os.path.exists(fp):
+            return False
+        with open(fp, 'r', encoding='utf-8') as f:
+            d = json.load(f)
+        self.objects = d.get('objects', {})
+        self.attributes = d.get('attributes', {})
+        self.schemas = d.get('schemas', {})
+        self.conventions = d.get('conventions', '')
+        self.impls = d.get('impls', {})
+        self.incidence = {}
+        for k, v in d.get('incidence', {}).items():
+            p = k.split('|')
+            if len(p) == 2:
+                self.incidence[(p[0], p[1])] = v if v in VALID_I else 'RW'
+        seed_d = d.get('seed', {})
+        if seed_d:
+            self.seed.from_dict(seed_d)
+            self.seed_chain = SeedChain([self.seed])
+        self.current_node = d.get('current_node')
+        self.dirty = d.get('dirty', False)
+        if 'dag' in d:
+            self.dag.from_dict(d['dag'])
+        self.compute()
+        return True
