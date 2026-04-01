@@ -202,28 +202,8 @@ def assemble_html(engine, impl_selection=None):
         issues.append('Dependency cycle detected. All modules included but order may be suboptimal.')
     
     # Game loop
-    loop_lines = ['\n// ═══ Game Loop (topological order) ═══']
-    loop_lines.append('const ALL_MODULES = [')
-    for oid in order:
-        on = engine.objects[oid]['name']
-        sn = safe_name(on)
-        # Try to find the module variable name from the impl
-        loop_lines.append("  typeof mod_%s !== 'undefined' ? mod_%s : {name:'%s',init(){},update(){},render(){}}," % (sn, sn, on))
-    loop_lines.append('];')
-    loop_lines.append('')
-    loop_lines.append('function gameInit() {')
-    loop_lines.append('  initChannels();')
-    loop_lines.append('  ALL_MODULES.forEach(m => { if(m.init) m.init(state); });')
-    loop_lines.append('}')
-    loop_lines.append('')
-    loop_lines.append('function gameUpdate(dt) {')
-    loop_lines.append('  ALL_MODULES.forEach(m => { if(m.update) m.update(state, dt); });')
-    loop_lines.append('}')
-    loop_lines.append('')
-    loop_lines.append('function gameRender(ctx) {')
-    loop_lines.append('  ALL_MODULES.forEach(m => { if(m.render) m.render(state, ctx); });')
-    loop_lines.append('}')
-    
+    loop_lines = _build_game_loop_js(engine, order)
+
     # Bootstrap
     boot = [
         '\n// ═══ Bootstrap ═══',
@@ -311,3 +291,197 @@ def _strip_ts_syntax(code):
         if stripped.startswith('return MODULE_IMPL'): continue
         out.append(line)
     return '\n'.join(out)
+
+
+# ═══ Multi-File Assembly ═══
+
+def generate_index_html(engine, module_names):
+    """Generate index.html that references framework.js, style.css, and module files."""
+    node_info = engine.current_node or '?'
+    lines = [
+        '<!DOCTYPE html>',
+        '<html lang="en">',
+        '<head>',
+        '  <meta charset="utf-8">',
+        '  <title>KonceptOS — %s</title>' % node_info,
+        '  <link rel="stylesheet" href="style.css">',
+        '</head>',
+        '<body>',
+        '  <canvas id="c" width="800" height="600"></canvas>',
+        '  <script src="framework.js"></script>',
+    ]
+    for mn in module_names:
+        lines.append('  <script src="modules/%s.js"></script>' % safe_name(mn))
+    boot = [
+        '  <script>',
+        '    const canvas = document.getElementById("c");',
+        '    const ctx = canvas.getContext("2d");',
+        '    gameInit();',
+        '    let lastTime = performance.now();',
+        '    function mainLoop(now) {',
+        '      const dt = (now - lastTime) / 16.67;',
+        '      lastTime = now;',
+        '      gameUpdate(dt);',
+        '      ctx.clearRect(0, 0, canvas.width, canvas.height);',
+        '      gameRender(ctx);',
+        '      requestAnimationFrame(mainLoop);',
+        '    }',
+        '    requestAnimationFrame(mainLoop);',
+        '  </script>',
+        '</body>',
+        '</html>',
+    ]
+    lines.extend(boot)
+    return '\n'.join(lines)
+
+
+def generate_style_css(engine):
+    """Generate style.css with basic layout."""
+    return """/* KonceptOS Framework Styles */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #111;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+}
+
+canvas {
+  border: 1px solid #333;
+  background: #000;
+}
+
+/* Channel debug panel (optional) */
+#debug {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  color: #0f0;
+  font-family: monospace;
+  font-size: 11px;
+  pointer-events: none;
+  line-height: 1.4;
+}
+"""
+
+
+def generate_module_js(engine, oid, impl):
+    """Generate a .js file for one module from its impl.
+
+    impl: dict with keys {code, comment, ts}
+    Returns: string of JS code
+    """
+    on = engine.objects[oid]['name']
+    sn = safe_name(on)
+    code = impl.get('code', '')
+    code = _strip_ts_syntax(code)
+    header = (
+        '// ═══ %s (impl #%d) ═══\n'
+        '// %s\n\n'
+    ) % (on, engine.impls.get(on, []).index(impl), impl.get('comment', ''))
+    return header + code
+
+
+def assemble_dir(engine, output_dir='./output', impl_selection=None):
+    """Assemble K → multi-file project directory.
+
+    Creates:
+      output_dir/
+        index.html
+        framework.js
+        style.css
+        modules/
+          ModuleA.js
+          ModuleB.js
+
+    Returns: (output_dir, issues_list)
+    """
+    import os
+
+    order, has_cycle = engine.topo_sort()
+    issues = []
+    missing = []
+
+    # Prepare modules directory
+    modules_dir = os.path.join(output_dir, 'modules')
+    os.makedirs(modules_dir, exist_ok=True)
+
+    # Write framework.js
+    framework = generate_framework_js(engine)
+    game_loop = _build_game_loop_js(engine, order)
+    with open(os.path.join(output_dir, 'framework.js'), 'w', encoding='utf-8') as f:
+        f.write('// Assembled by KonceptOS v2.1 | Node: %s\n\n' % (engine.current_node or '?'))
+        f.write(framework)
+        f.write('\n\n')
+        f.write(game_loop)
+
+    # Write style.css
+    with open(os.path.join(output_dir, 'style.css'), 'w', encoding='utf-8') as f:
+        f.write(generate_style_css(engine))
+
+    # Write module JS files
+    module_names = []
+    for oid in order:
+        on = engine.objects[oid]['name']
+        sn = safe_name(on)
+        module_names.append(sn)
+        mod_impls = engine.impls.get(on, [])
+        if not mod_impls:
+            missing.append(on)
+            stub = (
+                '// ═══ %s — NO IMPL ═══\n'
+                'const mod_%s = { name:"%s", init(){}, update(){}, render(){} };\n'
+            ) % (on, sn, on)
+            with open(os.path.join(modules_dir, '%s.js' % sn), 'w', encoding='utf-8') as f:
+                f.write(stub)
+            continue
+        idx = (impl_selection or {}).get(on, -1)
+        impl = mod_impls[idx] if 0 <= idx < len(mod_impls) else mod_impls[-1]
+        code = generate_module_js(engine, oid, impl)
+        with open(os.path.join(modules_dir, '%s.js' % sn), 'w', encoding='utf-8') as f:
+            f.write(code)
+
+    # Write index.html
+    html = generate_index_html(engine, module_names)
+    with open(os.path.join(output_dir, 'index.html'), 'w', encoding='utf-8') as f:
+        f.write(html)
+
+    if missing:
+        issues.append('Missing impls: %s' % ', '.join(missing))
+    if has_cycle:
+        issues.append('Dependency cycle detected. All modules included but order may be suboptimal.')
+
+    return output_dir, issues
+
+
+def _build_game_loop_js(engine, order):
+    """Build the game loop JS string (shared between assemble_html and assemble_dir)."""
+    loop_lines = ['// ═══ Game Loop (topological order) ═══']
+    loop_lines.append('const ALL_MODULES = [')
+    for oid in order:
+        on = engine.objects[oid]['name']
+        sn = safe_name(on)
+        loop_lines.append(
+            "  typeof mod_%s !== 'undefined' ? mod_%s : {name:'%s',init(){},update(){},render(){}},"
+            % (sn, sn, on)
+        )
+    loop_lines.append('];')
+    loop_lines.extend([
+        '',
+        'function gameInit() {',
+        '  initChannels();',
+        '  ALL_MODULES.forEach(m => { if(m.init) m.init(state); });',
+        '}',
+        '',
+        'function gameUpdate(dt) {',
+        '  ALL_MODULES.forEach(m => { if(m.update) m.update(state, dt); });',
+        '}',
+        '',
+        'function gameRender(ctx) {',
+        '  ALL_MODULES.forEach(m => { if(m.render) m.render(state, ctx); });',
+        '}',
+    ])
+    return '\n'.join(loop_lines)

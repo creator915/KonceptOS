@@ -3,8 +3,8 @@ import json,os
 from .util import VALID_I, extract_json, cc, C
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY","")
-OPENROUTER_MODEL = "anthropic/claude-opus-4.6"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL","anthropic/claude-opus-4.6")
+OPENROUTER_URL = os.environ.get("OPENROUTER_URL","https://openrouter.ai/api/v1/chat/completions")
 
 class LLM:
     def __init__(self):
@@ -54,7 +54,7 @@ class LLM:
             "Pure JSON:\n"
             '{"objects":[{"id":"F01","name":"...","desc":"..."},...],\n'
             '"attributes":[{"id":"A","name":"...","desc":"..."},...],\n'
-            '"incidence":{"F01":"R,0,W,RW,...","F02":"...",...}}',text,8000)
+            '"incidence":{"F01":"R,0,W,RW,...","F02":"...",...}}',text,32000)
 
     # ── Direction judgment ──
     def judge_batch(self,pairs,context=''):
@@ -77,7 +77,7 @@ class LLM:
             if context: prompt+=context+"\n\n"
             prompt+="Pairs:\n"+'\n'.join(lines)
             prompt+="\n\nPure JSON: {\"%d\":\"R\",\"%d\":\"0\",...}"%(start,start+1)
-            r=self.ask("Answer with ONLY the JSON mapping index to direction (0/R/W/RW).",prompt,2000)
+            r=self.ask("Answer with ONLY the JSON mapping index to direction (0/R/W/RW).",prompt,4000)
             d,_=extract_json(r)
             if d:
                 for k,v in d.items():
@@ -108,7 +108,7 @@ class LLM:
                 "List 2-5 conceptually different sub-modules (NOT R/W splits).%s\n\n"
                 "Pure JSON: {\"expansions\":[{\"name\":\"...\",\"desc\":\"...\"},...]}"
             )%(name,vhint)
-        return self.ask(system,"Name: %s\nDesc: %s"%(name,desc),1000)
+        return self.ask(system,"Name: %s\nDesc: %s"%(name,desc),2000)
 
     # ── Schema suggestion ──
     def suggest_schemas(self,attrs_info,conventions=''):
@@ -122,7 +122,7 @@ class LLM:
         if conventions: prompt+="Constraints:\n%s\n\n"%conventions
         prompt+="Data channels:\n"+'\n'.join(lines)
         prompt+='\n\nPure JSON: {"channel_name":"TypeScript type",...}'
-        r=self.ask("Answer with ONLY the JSON.",prompt,2000)
+        r=self.ask("Answer with ONLY the JSON.",prompt,4000)
         d,_=extract_json(r)
         return d if d else {}
 
@@ -152,10 +152,135 @@ class LLM:
             "4. Use plain JavaScript (no TypeScript syntax, no type annotations)\n"
             "5. Export default your module object\n\n"
             "Output ONLY the module code. No markdown fences. No explanations.")
-        return self.ask(system,p,4000)
+        return self.ask(system,p,8000)
 
     # ── Full build (legacy) ──
     def build_full(self,spec,conventions):
         s="Generate a COMPLETE RUNNABLE single-file HTML+JS webapp.\nOutput ONLY HTML. No markdown fences."
         p=("=== CONSTRAINTS ===\n"+conventions+"\n\n" if conventions else "")+spec
         return self.ask(s,p)
+
+    # ── Full build with test hooks ──
+    def build_full_with_hooks(self, spec, conventions, interface_info):
+        """Generate HTML+JS webapp AND test hooks for Selenium verification.
+        interface_info: {'inputs': [...], 'outputs': [...], 'schemas': {...}}
+        Returns: (html_content, test_hooks_python_script)
+        """
+        # 构建接口边界说明
+        ib_lines = ["\n\n== INTERFACE BOUNDARIES =="]
+        ib_lines.append("\n--- INPUTS (W/RW attributes - user provides these) ---")
+        for inp in interface_info.get('inputs', []):
+            ib_lines.append(f"  {inp['name']}: {inp['desc']} (writers: {', '.join(inp['writers'])})")
+
+        ib_lines.append("\n--- OUTPUTS (R/RW attributes - expected results) ---")
+        for out in interface_info.get('outputs', []):
+            ib_lines.append(f"  {out['name']}: {out['desc']} (readers: {', '.join(out['readers'])})")
+
+        ib_lines.append("\n--- TYPES ---")
+        for attr_id, schema in interface_info.get('schemas', {}).items():
+            ib_lines.append(f"  {attr_id}: {schema}")
+
+        ib_text = '\n'.join(ib_lines)
+
+        prompt = f"""Generate TWO outputs:
+
+1. A COMPLETE RUNNABLE single-file HTML+JS webapp with Canvas
+2. A Python test hooks file (selenium_test_hooks.py) for Selenium testing
+
+The test hooks should define:
+- TEST_INPUTS: list of (input_name, element_selector_or_id, test_value) tuples
+- TEST_OUTPUTS: list of (output_name, element_selector_or_id, check_type) tuples
+  check_type can be: 'exists', 'text_contains', 'canvas_has_content'
+- CANVAS_CHECK_JS: JavaScript code to check canvas state
+- EXPECTED_BEHAVIOR: description of what should happen when inputs are triggered
+
+=== CONSTRAINTS ===
+{conventions if conventions else '(none)'}
+
+{ib_text}
+
+=== SPEC ===
+{spec}
+
+Output format (use EXACT delimiters):
+---HTML---
+[complete HTML content here]
+---TEST---
+[Python test hooks content here]
+"""
+        r = self.ask("Generate HTML+TEST_HOOKS. Use EXACT ---HTML--- and ---TEST--- delimiters.", prompt, 48000)
+
+        # 解析 HTML 和 TEST 部分
+        html_content = r
+        test_hooks = ""
+
+        if '---HTML---' in r and '---TEST---' in r:
+            parts = r.split('---HTML---')
+            if len(parts) > 1:
+                html_and_test = parts[1]
+                if '---TEST---' in html_and_test:
+                    html_content = html_and_test.split('---TEST---')[0].strip()
+                    test_hooks = html_and_test.split('---TEST---')[1].strip()
+                else:
+                    html_content = html_and_test.strip()
+
+        return html_content, test_hooks
+
+    # ── LLM judgment: should regenerate? ──
+    def should_regenerate(self, spec, conventions, interface_info, test_feedback):
+        """让 LLM 判断测试失败是否严重到需要重新生成"""
+        prompt = f"""Test failures detected:
+{test_feedback}
+
+Interface boundaries:
+  Inputs: {[inp['name'] for inp in interface_info.get('inputs', [])]}
+  Outputs: {[out['name'] for out in interface_info.get('outputs', [])]}
+
+Should we regenerate the HTML based on this feedback? Consider:
+- Are the failures critical (page doesn't load, major interaction broken)?
+- Or minor (cosmetic, edge case)?
+
+Respond with ONLY one word: yes or no"""
+        r = self.ask("Decision: should we regenerate?", prompt, 1000)
+        return 'yes' in r.lower()
+
+    # ── LLM analyze errors and suggest fix prompt ──
+    def analyze_errors(self, spec, conventions, interface_info, test_feedback):
+        """让 LLM 分析错误并给出修正建议（返回给下一轮生成）"""
+        prompt = f"""Analyze these test failures and suggest corrections for regeneration:
+
+Test failures:
+{test_feedback}
+
+Interface boundaries:
+  Inputs: {interface_info.get('inputs', [])}
+  Outputs: {interface_info.get('outputs', [])}
+
+Provide a brief (2-3 sentences) correction suggestion to guide the next regeneration.
+Focus on WHAT is wrong and HOW to fix it. Do not regenerate the full HTML.
+"""
+        return self.ask("Provide correction suggestions.", prompt, 2000)
+
+    # ── Output format decision ──
+    def decide_output_format(self, spec):
+        """Ask LLM whether to output single HTML or multi-file directory.
+        Returns: 'single' or 'multi'
+        """
+        prompt = (
+            "A KonceptOS project has the following spec (up to 2000 chars):\n"
+            f"{spec[:2000]}\n\n"
+            "Should this be built as:\n"
+            "1. single — a single self-contained HTML file (simpler, easier to share, less maintainable)\n"
+            "2. multi — a multi-file project with separate HTML/JS/CSS (better for complex projects, easier to maintain)\n\n"
+            "Consider: number of modules, project complexity, need for maintainability.\n"
+            "Respond with ONLY the word: single\n"
+            "or: multi"
+        )
+        r = self.ask(
+            "Answer with ONLY 'single' or 'multi'.",
+            prompt, 4000
+        )
+        r = r.strip().lower()
+        if 'multi' in r:
+            return 'multi'
+        return 'single'
