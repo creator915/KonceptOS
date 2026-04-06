@@ -580,7 +580,7 @@
 
         <article class="panel">
           <h2>Feedback And Repair</h2>
-          <p class="lead">After trying the generated app, capture your feedback and turn it into a repair brief.</p>
+          <p class="lead">After trying the generated app, report the bug, let AI diagnose it, apply a fix, then refresh the preview and test again.</p>
           <div class="row">
             <label>
               Manifest Path
@@ -591,12 +591,24 @@
               <input id="feedback-outdir" value="/Users/renzhenzhen/Documents/博二/KonceptOS/workspace/generated/generated_big_project" />
             </label>
           </div>
+          <div class="row">
+            <label>
+              Preview URL
+              <input id="feedback-preview-url" value="http://127.0.0.1:9000" />
+            </label>
+            <label>
+              Max Files Context
+              <input id="feedback-max-files" type="number" placeholder="optional" min="1" />
+            </label>
+          </div>
           <label>
             Experience Feedback
-            <textarea id="feedback-text" placeholder="For example: the page opens but the renderer is blank, login flow feels broken, or planning page is missing retry history."></textarea>
+            <textarea id="feedback-text" placeholder="例如：点击 Start Game 后没有任何跳转；预期是进入第一关或开始界面消失。"></textarea>
           </label>
           <div class="actions">
-            <button class="primary" id="run-feedback">Create Repair Brief</button>
+            <button class="ghost" id="run-feedback">记录反馈</button>
+            <button class="secondary" id="run-repair-plan">分析 Bug</button>
+            <button class="primary" id="run-repair-apply">应用修复</button>
           </div>
           <div class="status" id="feedback-status"></div>
         </article>
@@ -935,6 +947,32 @@
         outdir: document.getElementById("feedback-outdir").value,
         feedback: document.getElementById("feedback-text").value
       }, "feedback-status", "feedback");
+    });
+
+    document.getElementById("run-repair-plan").addEventListener("click", () => {
+      api("/api/repair/plan", {
+        manifest_path: document.getElementById("feedback-manifest-path").value,
+        outdir: document.getElementById("feedback-outdir").value,
+        feedback: document.getElementById("feedback-text").value,
+        preview_url: document.getElementById("feedback-preview-url").value,
+        max_files: document.getElementById("feedback-max-files").value,
+        model: document.getElementById("plan-model").value,
+        api_key: document.getElementById("plan-api-key").value,
+        async: true
+      }, "feedback-status", "repair-plan");
+    });
+
+    document.getElementById("run-repair-apply").addEventListener("click", () => {
+      api("/api/repair/apply", {
+        manifest_path: document.getElementById("feedback-manifest-path").value,
+        outdir: document.getElementById("feedback-outdir").value,
+        feedback: document.getElementById("feedback-text").value,
+        preview_url: document.getElementById("feedback-preview-url").value,
+        max_files: document.getElementById("feedback-max-files").value,
+        model: document.getElementById("plan-model").value,
+        api_key: document.getElementById("plan-api-key").value,
+        async: true
+      }, "feedback-status", "repair-apply");
     });
 
     scratchCard.addEventListener("click", () => setMode("scratch"));

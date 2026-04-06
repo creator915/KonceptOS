@@ -26,6 +26,8 @@ from urllib.parse import parse_qs, urlparse
 
 from konceptos2_mvp import (
     OpenRouterClient,
+    apply_repair_plan,
+    create_repair_plan,
     default_big_project_spec,
     generate_project,
     graph_summary,
@@ -248,6 +250,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.handle_run_stop(body)
             elif parsed.path == "/api/feedback":
                 self.handle_feedback(body)
+            elif parsed.path == "/api/repair/plan":
+                self.handle_repair_plan(body)
+            elif parsed.path == "/api/repair/apply":
+                self.handle_repair_apply(body)
             elif parsed.path == "/api/forge":
                 self.handle_forge(body)
             elif parsed.path == "/api/default-spec":
@@ -618,6 +624,80 @@ class Handler(BaseHTTPRequestHandler):
                 "verification": verification,
             }
         )
+
+    def handle_repair_plan(self, body):
+        client = self.build_client(body)
+        manifest_path = coerce_path(body.get("manifest_path") or "")
+        outdir = coerce_path(body.get("outdir") or ".")
+        feedback_text = (body.get("feedback") or "").strip()
+        preview_url = (body.get("preview_url") or "").strip() or None
+        max_files = body.get("max_files")
+        if not manifest_path.exists():
+            raise RuntimeError(f"Manifest file not found: {manifest_path}")
+        if not outdir.exists():
+            raise RuntimeError(f"Output directory not found: {outdir}")
+        if not feedback_text:
+            raise RuntimeError("Provide feedback text.")
+        run_async = bool(body.get("async"))
+        payload = {
+            "manifest_path": str(manifest_path),
+            "outdir": str(outdir),
+            "preview_url": preview_url,
+            "max_files": int(max_files) if max_files else None,
+        }
+
+        def run_plan():
+            return create_repair_plan(
+                client,
+                manifest_path,
+                outdir,
+                feedback_text,
+                preview_url=preview_url,
+                max_files=int(max_files) if max_files else None,
+            )
+
+        if run_async:
+            job = start_background_job("repair_plan", payload, run_plan)
+            self.send_json({"ok": True, "job": job})
+            return
+        self.send_json({"ok": True, **run_plan()})
+
+    def handle_repair_apply(self, body):
+        client = self.build_client(body)
+        manifest_path = coerce_path(body.get("manifest_path") or "")
+        outdir = coerce_path(body.get("outdir") or ".")
+        feedback_text = (body.get("feedback") or "").strip()
+        preview_url = (body.get("preview_url") or "").strip() or None
+        max_files = body.get("max_files")
+        if not manifest_path.exists():
+            raise RuntimeError(f"Manifest file not found: {manifest_path}")
+        if not outdir.exists():
+            raise RuntimeError(f"Output directory not found: {outdir}")
+        if not feedback_text:
+            raise RuntimeError("Provide feedback text.")
+        run_async = bool(body.get("async"))
+        payload = {
+            "manifest_path": str(manifest_path),
+            "outdir": str(outdir),
+            "preview_url": preview_url,
+            "max_files": int(max_files) if max_files else None,
+        }
+
+        def run_apply():
+            return apply_repair_plan(
+                client,
+                manifest_path,
+                outdir,
+                feedback_text,
+                preview_url=preview_url,
+                max_files=int(max_files) if max_files else None,
+            )
+
+        if run_async:
+            job = start_background_job("repair_apply", payload, run_apply)
+            self.send_json({"ok": True, "job": job})
+            return
+        self.send_json({"ok": True, **run_apply()})
 
 
 def main():

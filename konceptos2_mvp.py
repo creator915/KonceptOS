@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 from collections import Counter, deque
@@ -119,6 +120,12 @@ def safe_rel(path, root):
     return str(Path(path).resolve().relative_to(Path(root).resolve()))
 
 
+def truncate_text(text, max_chars=8000):
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n# truncated"
+
+
 def default_verification_for_file(item):
     path = item["path"]
     suffix = Path(path).suffix.lower()
@@ -205,6 +212,13 @@ class OpenRouterClient:
             raise RuntimeError(f"OpenRouter HTTP {exc.code}: {body[:500]}") from exc
         except Exception as exc:
             raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
+
+    def chat_json(self, system, user, max_tokens=32000):
+        reply = self.chat(system, user, max_tokens=max_tokens)
+        data, err = extract_json(reply)
+        if not data:
+            raise RuntimeError(f"JSON extraction failed: {err}")
+        return data
 
 
 class PythonAnalyzer(ast.NodeVisitor):
@@ -996,6 +1010,251 @@ def verify_project(manifest_path, outdir, max_files=None, require_complete=False
         "relationship_issues": relationship,
         "contract_issues": contracts,
         "graph_summary": graph_summary(graph),
+    }
+
+
+def manifest_subset(manifest_path, max_files=None):
+    manifest = json.loads(read_text(manifest_path))
+    validate_manifest(manifest)
+    specs = selected_manifest_files(manifest, max_files=max_files)
+    return manifest, specs, manifest_file_map(manifest)
+
+
+def extract_feedback_markers(text):
+    quoted = re.findall(r'"([^"]+)"|“([^”]+)”|\'([^\']+)\'', text)
+    phrases = [next(part for part in group if part) for group in quoted if any(group)]
+    rough_tokens = re.findall(r"[A-Za-z][A-Za-z0-9_:-]{2,}", text)
+    markers = set(phrases)
+    markers.update(token for token in rough_tokens if token.lower() not in {"this", "that", "with", "from", "have", "there", "after", "before", "when"})
+    return sorted(markers)
+
+
+def fetch_preview_snapshot(preview_url, max_chars=6000):
+    if not preview_url:
+        return None
+    try:
+        with urllib.request.urlopen(preview_url, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        return {
+            "url": preview_url,
+            "html": truncate_text(html, max_chars=max_chars),
+        }
+    except Exception as exc:
+        return {
+            "url": preview_url,
+            "error": str(exc),
+        }
+
+
+def collect_bug_evidence(manifest_path, outdir, feedback_text, preview_url=None, max_files=None, candidate_limit=6):
+    root = Path(outdir).resolve()
+    manifest = None
+    selected_specs = []
+    file_map = {}
+    if manifest_path and Path(manifest_path).exists():
+        manifest, selected_specs, file_map = manifest_subset(manifest_path, max_files=max_files)
+    verification = verify_project(manifest_path, outdir, max_files=max_files, require_complete=False) if manifest_path else None
+    graph = ingest_repository(root)
+    markers = extract_feedback_markers(feedback_text)
+    candidates = []
+    preferred_names = {"index", "app", "main", "ui", "menu", "screen", "router", "engine", "game"}
+    for rel, info in graph["files"].items():
+        if info["language"] not in {"html", "javascript", "typescript", "python"}:
+            continue
+        text = read_text(root / rel)
+        score = 0
+        lower = text.lower()
+        rel_lower = rel.lower()
+        for marker in markers:
+            marker_lower = marker.lower()
+            if marker_lower in lower:
+                score += 8
+            if marker_lower in rel_lower:
+                score += 6
+        if any(name in rel_lower for name in preferred_names):
+            score += 3
+        if rel.endswith(("index.html", "main.py", "App.tsx", "engine.js", "ui.js", "router.js")):
+            score += 4
+        if score > 0:
+            candidates.append(
+                {
+                    "path": rel,
+                    "score": score,
+                    "language": info["language"],
+                    "snippet": truncate_text(text, max_chars=5000),
+                }
+            )
+    candidates.sort(key=lambda item: (-item["score"], item["path"]))
+    preview = fetch_preview_snapshot(preview_url)
+    return {
+        "feedback_text": feedback_text,
+        "markers": markers,
+        "preview": preview,
+        "verification": verification,
+        "graph_summary": graph_summary(graph),
+        "candidate_files": candidates[:candidate_limit],
+        "selected_files": [item["path"] for item in selected_specs],
+        "manifest_summary": {
+            "project_name": manifest.get("project_name") if manifest else None,
+            "file_count": len(manifest.get("files", [])) if manifest else 0,
+        } if manifest else None,
+    }
+
+
+def repair_plan_prompt(evidence):
+    candidates = "\n\n".join(
+        f"### {item['path']} (score={item['score']}, lang={item['language']})\n{item['snippet']}"
+        for item in evidence["candidate_files"]
+    )
+    preview = evidence.get("preview")
+    preview_text = json.dumps(preview, ensure_ascii=False, indent=2) if preview else "null"
+    verification_summary = json.dumps((evidence.get("verification") or {}).get("summary"), ensure_ascii=False, indent=2)
+    return f"""
+You are debugging a generated web project.
+
+User feedback:
+{evidence['feedback_text']}
+
+Markers extracted from the feedback:
+{', '.join(evidence['markers']) or '- none'}
+
+Project summary:
+{json.dumps(evidence.get('manifest_summary'), ensure_ascii=False, indent=2)}
+
+Verification summary:
+{verification_summary}
+
+Preview snapshot:
+{preview_text}
+
+Candidate files:
+{candidates or 'No candidate files found.'}
+
+Return pure JSON:
+{{
+  "bug_summary": "...",
+  "likely_root_cause": "...",
+  "files_to_modify": ["path/to/file"],
+  "why_these_files": ["..."],
+  "checks_after_fix": ["..."]
+}}
+"""
+
+
+def create_repair_plan(client, manifest_path, outdir, feedback_text, preview_url=None, max_files=None):
+    evidence = collect_bug_evidence(manifest_path, outdir, feedback_text, preview_url=preview_url, max_files=max_files)
+    system = "You are a senior debugging engineer. Output valid JSON only."
+    plan = client.chat_json(system, repair_plan_prompt(evidence), max_tokens=24000)
+    if "files_to_modify" not in plan or not isinstance(plan["files_to_modify"], list):
+        raise RuntimeError("Repair plan did not include files_to_modify.")
+    return {"plan": plan, "evidence": evidence}
+
+
+def relevant_context_for_file(root, target_path, candidate_files, manifest_specs, limit=4):
+    root = Path(root).resolve()
+    context = []
+    manifest_lookup = {item["path"]: item for item in manifest_specs}
+    deps = manifest_lookup.get(target_path, {}).get("depends_on", [])
+    for dep in deps:
+        dep_path = root / dep
+        if dep_path.exists():
+            context.append((dep, truncate_text(read_text(dep_path), max_chars=5000)))
+    for item in candidate_files:
+        if item["path"] == target_path:
+            continue
+        dep_path = root / item["path"]
+        if dep_path.exists():
+            context.append((item["path"], truncate_text(read_text(dep_path), max_chars=4000)))
+    deduped = []
+    seen = set()
+    for path, text in context:
+        if path in seen:
+            continue
+        seen.add(path)
+        deduped.append((path, text))
+    return deduped[:limit]
+
+
+def rewrite_file_for_bug(client, manifest_path, outdir, target_path, plan, evidence, max_files=None):
+    root = Path(outdir).resolve()
+    file_path = root / target_path
+    if not file_path.exists():
+        raise RuntimeError(f"Cannot repair missing file: {target_path}")
+    current = read_text(file_path)
+    manifest = json.loads(read_text(manifest_path)) if manifest_path and Path(manifest_path).exists() else {"files": []}
+    validate_manifest(manifest)
+    selected_specs = selected_manifest_files(manifest, max_files=max_files)
+    context_files = relevant_context_for_file(root, target_path, evidence["candidate_files"], selected_specs)
+    context_blob = "\n\n".join(f"### {path}\n{text}" for path, text in context_files)
+    verification_summary = json.dumps((evidence.get("verification") or {}).get("summary"), ensure_ascii=False, indent=2)
+    system = "You are a senior software engineer fixing one file. Output only the full updated file."
+    user = f"""
+Fix this bug in the generated project.
+
+Bug summary:
+{plan.get('bug_summary')}
+
+Likely root cause:
+{plan.get('likely_root_cause')}
+
+Why this file matters:
+{json.dumps(plan.get('why_these_files', []), ensure_ascii=False, indent=2)}
+
+Target file:
+{target_path}
+
+User feedback:
+{evidence['feedback_text']}
+
+Verification summary:
+{verification_summary}
+
+Current file:
+```text
+{current}
+```
+
+Related files:
+{context_blob or '- none'}
+
+Rules:
+- Output only the full updated contents of {target_path}.
+- Fix the reported bug directly.
+- Do not introduce undeclared internal imports.
+- Preserve the existing style if possible.
+"""
+    rewritten = client.chat(system, user, max_tokens=32000)
+    return strip_fences(rewritten)
+
+
+def apply_repair_plan(client, manifest_path, outdir, feedback_text, preview_url=None, max_files=None):
+    root = Path(outdir).resolve()
+    plan_bundle = create_repair_plan(client, manifest_path, outdir, feedback_text, preview_url=preview_url, max_files=max_files)
+    plan = plan_bundle["plan"]
+    evidence = plan_bundle["evidence"]
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    backup_root = root / "konceptos_repairs" / f"repair_{stamp}" / "backup"
+    ensure_dir(backup_root)
+    changed_files = []
+    for rel in plan["files_to_modify"][:4]:
+        file_path = root / rel
+        if not file_path.exists():
+            continue
+        original = read_text(file_path)
+        rewritten = rewrite_file_for_bug(client, manifest_path, outdir, rel, plan, evidence, max_files=max_files)
+        if rewritten.strip() and rewritten != original:
+            backup_path = backup_root / rel
+            ensure_dir(backup_path.parent)
+            backup_path.write_text(original, encoding="utf-8")
+            file_path.write_text(rewritten, encoding="utf-8")
+            changed_files.append(rel)
+    verification = verify_project(manifest_path, outdir, max_files=max_files, require_complete=False) if manifest_path else None
+    return {
+        "plan": plan,
+        "evidence": evidence,
+        "changed_files": changed_files,
+        "backup_dir": str(backup_root.parent),
+        "verification": verification,
     }
 
 
