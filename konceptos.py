@@ -15,11 +15,11 @@ Conventions = cross-channel value constraints (e.g. "jump height > platform gap"
 They are injected into LLM prompts during build/resolve.
 """
 
-import json,sys,re,time
+import json,sys,re,time,os
 from pathlib import Path
 
-OPENROUTER_API_KEY = ""
-OPENROUTER_MODEL = "anthropic/claude-opus-4.6"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-opus-4.6")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 VALID_I = {'0','R','W','RW'}
 
