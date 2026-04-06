@@ -270,6 +270,59 @@
       gap: 18px;
     }
 
+    .intent-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .intent-card {
+      border: 1px solid rgba(20, 32, 43, 0.1);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.5);
+      cursor: pointer;
+      transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+    }
+
+    .intent-card:hover {
+      transform: translateY(-1px);
+    }
+
+    .intent-card.active {
+      border-color: rgba(180, 74, 46, 0.42);
+      box-shadow: 0 12px 30px rgba(132, 45, 25, 0.12);
+      background: linear-gradient(180deg, rgba(255,247,242,0.92), rgba(255,255,255,0.65));
+    }
+
+    .intent-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 17px;
+      font-family: "Iowan Old Style", "Palatino Linotype", serif;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    details.advanced {
+      margin-top: 14px;
+      border: 1px dashed rgba(20, 32, 43, 0.18);
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: rgba(20, 32, 43, 0.03);
+    }
+
+    details.advanced summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
     .timeline {
       display: grid;
       gap: 10px;
@@ -357,126 +410,123 @@
       </div>
     </section>
 
-    <section class="grid">
-      <article class="panel">
-        <h2>Repository Ingest</h2>
-        <p class="lead">Build the structural graph from a local repository root.</p>
-        <label>
-          Repository Root
-          <input id="ingest-root" value="." />
-        </label>
-        <label>
-          Optional Graph Output Path
-          <input id="ingest-output" value="workspace/analysis/konceptos_graph.json" />
-        </label>
-        <div class="actions">
-          <button class="primary" id="run-ingest">Run Ingest</button>
+    <section class="stack">
+      <div class="intent-switch">
+        <div class="intent-card active" id="intent-scratch-card">
+          <strong>从零开发</strong>
+          <div class="subtle">你只需要先说你想做什么。系统会先帮你规划，再生成一个完整的小 demo 或较大的项目。</div>
         </div>
-        <div class="status" id="ingest-status"></div>
-      </article>
+        <div class="intent-card" id="intent-evolve-card">
+          <strong>已有项目演化</strong>
+          <div class="subtle">如果你已经有项目，就告诉系统项目路径和你想改什么，再去做结构注入和影响分析。</div>
+        </div>
+      </div>
 
-      <article class="panel">
-        <h2>Impact Analysis</h2>
-        <p class="lead">Use a repo root or an existing graph JSON, then analyze proposed file changes.</p>
+      <article class="panel" id="mode-scratch">
+        <h2>从零开发</h2>
+        <p class="lead">直接说你想开发什么。系统会先做规划，再按文件预算生成一个完整可体验的 demo。</p>
         <label>
-          Source Repo or Graph JSON
-          <input id="impact-source" value="workspace/analysis/konceptos_graph.json" />
-        </label>
-        <label>
-          Changed Files, One Per Line
-          <textarea id="impact-changed">konceptos.py</textarea>
-        </label>
-        <div class="row">
-          <label>
-            Radius
-            <input id="impact-radius" type="number" value="1" min="0" />
-          </label>
-          <label>
-            Optional Report Output Path
-            <input id="impact-output" value="workspace/analysis/konceptos_impact.json" />
-          </label>
-        </div>
-        <div class="actions">
-          <button class="secondary" id="run-impact">Run Impact</button>
-        </div>
-        <div class="status" id="impact-status"></div>
-      </article>
-
-      <article class="panel">
-        <h2>Manifest Planning</h2>
-        <p class="lead">Start from your own requirement text. The file path is optional.</p>
-        <label>
-          Requirements File Path
-          <input id="plan-requirements-path" value="examples/specs/mvp_big_project_spec.md" placeholder="optional: /abs/path/to/requirements.md" />
-        </label>
-        <label>
-          Your Requirements
-          <textarea id="plan-requirements-text" placeholder="Describe the product you want to build, the stack, and the user experience you care about."></textarea>
+          你想开发什么东西？
+          <textarea id="plan-requirements-text" placeholder="例如：做一个可以上传图片并生成海报的小网站，需要登录、作品列表和一个简洁的编辑页面。"></textarea>
         </label>
         <div class="row-3">
           <label>
-            Manifest Output
-            <input id="plan-output" value="workspace/manifests/big_project_manifest.json" />
-          </label>
-          <label>
-            Target Lines
-            <input id="plan-target-lines" type="number" value="10000" min="1000" />
-          </label>
-          <label>
-            Project File Budget
+            Demo 文件预算
             <input id="plan-target-files" type="number" value="8" min="1" />
           </label>
-        </div>
-        <div class="row">
+          <label>
+            目标代码行数
+            <input id="plan-target-lines" type="number" value="3000" min="200" />
+          </label>
           <label>
             Model
             <input id="plan-model" value="anthropic/claude-opus-4.6" />
           </label>
-          <label>
-            OpenRouter API Key
-            <input id="plan-api-key" type="password" placeholder="sk-or-v1-..." />
-          </label>
         </div>
+        <label>
+          OpenRouter API Key
+          <input id="plan-api-key" type="password" placeholder="sk-or-v1-..." />
+        </label>
         <div class="actions">
-          <button class="primary" id="load-default-spec">Load Default Spec</button>
-          <button class="secondary" id="run-plan">Plan Project</button>
+          <button class="primary" id="load-default-spec">加载示例需求</button>
+          <button class="secondary" id="run-plan">先规划</button>
+          <button class="ghost" id="run-generate">继续按 manifest 生成</button>
+          <button class="ghost" id="run-verify">校验当前产物</button>
+          <button class="primary" id="run-forge">直接规划并生成</button>
         </div>
+        <details class="advanced">
+          <summary>高级路径设置</summary>
+          <div class="row">
+            <label>
+              Requirements File Path
+              <input id="plan-requirements-path" value="examples/specs/mvp_big_project_spec.md" placeholder="optional: /abs/path/to/requirements.md" />
+            </label>
+            <label>
+              Manifest Output
+              <input id="plan-output" value="workspace/manifests/big_project_manifest.json" />
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              Output Directory
+              <input id="generate-outdir" value="/Users/renzhenzhen/Documents/博二/KonceptOS/workspace/generated/generated_big_project" />
+            </label>
+            <label>
+              Generate Limit
+              <input id="generate-max-files" type="number" placeholder="optional resume/tooling limit" min="1" />
+            </label>
+          </div>
+        </details>
         <div class="status" id="plan-status"></div>
+        <div class="status" id="generate-status"></div>
       </article>
 
-      <article class="panel">
-        <h2>Generation</h2>
-        <p class="lead">Generate file-by-file from the manifest so structure survives prompt boundaries. Leave “Generate Limit” empty if you want the whole planned project. Use a small planning budget if you want a complete small demo.</p>
+      <article class="panel hidden" id="mode-evolve">
+        <h2>已有项目演化</h2>
+        <p class="lead">先给项目路径，再说你想改什么。结构注入、影响分析和后续生成都围绕现有项目来做。</p>
         <div class="row">
           <label>
-            Manifest Path
-            <input id="generate-manifest-path" value="workspace/manifests/big_project_manifest.json" />
+            项目路径
+            <input id="ingest-root" value="." />
           </label>
           <label>
-            Output Directory
-            <input id="generate-outdir" value="/Users/renzhenzhen/Documents/博二/KonceptOS/workspace/generated/generated_big_project" />
+            你想怎么改这个项目？
+            <textarea id="evolve-request" placeholder="例如：给当前项目加一个反馈页，并把首页重构成双栏布局。"></textarea>
           </label>
         </div>
-        <div class="row-3">
-          <label>
-            Generate Limit
-            <input id="generate-max-files" type="number" placeholder="optional resume/tooling limit" min="1" />
-          </label>
-          <label>
-            Model
-            <input id="generate-model" value="anthropic/claude-opus-4.6" />
-          </label>
-          <label>
-            OpenRouter API Key
-            <input id="generate-api-key" type="password" placeholder="sk-or-v1-..." />
-          </label>
-        </div>
+        <label>
+          Changed Files, One Per Line
+          <textarea id="impact-changed">konceptos.py</textarea>
+        </label>
         <div class="actions">
-          <button class="secondary" id="run-generate">Generate From Manifest</button>
-          <button class="ghost" id="run-verify">Verify Current Output</button>
-          <button class="primary" id="run-forge">Plan + Generate</button>
+          <button class="primary" id="run-ingest">先注入结构</button>
+          <button class="secondary" id="run-impact">分析影响面</button>
         </div>
-        <div class="status" id="generate-status"></div>
+        <details class="advanced">
+          <summary>高级路径设置</summary>
+          <div class="row">
+            <label>
+              Graph Output Path
+              <input id="ingest-output" value="workspace/analysis/konceptos_graph.json" />
+            </label>
+            <label>
+              Impact Source Repo or Graph JSON
+              <input id="impact-source" value="workspace/analysis/konceptos_graph.json" />
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              Impact Radius
+              <input id="impact-radius" type="number" value="1" min="0" />
+            </label>
+            <label>
+              Impact Report Output
+              <input id="impact-output" value="workspace/analysis/konceptos_impact.json" />
+            </label>
+          </div>
+        </details>
+        <div class="status" id="ingest-status"></div>
+        <div class="status" id="impact-status"></div>
       </article>
     </section>
 
@@ -567,6 +617,10 @@
     const badge = document.getElementById("console-badge");
     const snapshotTimeline = document.getElementById("snapshot-timeline");
     const latticeView = document.getElementById("lattice-view");
+    const scratchCard = document.getElementById("intent-scratch-card");
+    const evolveCard = document.getElementById("intent-evolve-card");
+    const scratchPanel = document.getElementById("mode-scratch");
+    const evolvePanel = document.getElementById("mode-evolve");
     let activeJobId = null;
     let activeRunId = null;
     let pollTimer = null;
@@ -585,6 +639,15 @@
 
     function done(label) {
       badge.textContent = label;
+    }
+
+    function setMode(mode) {
+      const scratch = mode === "scratch";
+      scratchCard.classList.toggle("active", scratch);
+      evolveCard.classList.toggle("active", !scratch);
+      scratchPanel.classList.toggle("hidden", !scratch);
+      evolvePanel.classList.toggle("hidden", scratch);
+      done(mode);
     }
 
     function normalizeLines(value) {
@@ -801,18 +864,18 @@
 
     document.getElementById("run-generate").addEventListener("click", () => {
       api("/api/generate", {
-        manifest_path: document.getElementById("generate-manifest-path").value,
+        manifest_path: document.getElementById("plan-output").value,
         outdir: document.getElementById("generate-outdir").value,
         max_files: document.getElementById("generate-max-files").value,
-        model: document.getElementById("generate-model").value,
-        api_key: document.getElementById("generate-api-key").value,
+        model: document.getElementById("plan-model").value,
+        api_key: document.getElementById("plan-api-key").value,
         async: true
       }, "generate-status", "generate");
     });
 
     document.getElementById("run-verify").addEventListener("click", () => {
       api("/api/verify", {
-        manifest_path: document.getElementById("generate-manifest-path").value,
+        manifest_path: document.getElementById("plan-output").value,
         outdir: document.getElementById("generate-outdir").value,
         max_files: document.getElementById("generate-max-files").value,
         require_complete: false
@@ -828,8 +891,8 @@
         target_lines: Number(document.getElementById("plan-target-lines").value || "10000"),
         target_files: Number(document.getElementById("plan-target-files").value || "0") || null,
         max_files: document.getElementById("generate-max-files").value,
-        model: document.getElementById("generate-model").value,
-        api_key: document.getElementById("generate-api-key").value,
+        model: document.getElementById("plan-model").value,
+        api_key: document.getElementById("plan-api-key").value,
         async: true
       }, "generate-status", "forge");
     });
@@ -865,10 +928,14 @@
       }, "feedback-status", "feedback");
     });
 
+    scratchCard.addEventListener("click", () => setMode("scratch"));
+    evolveCard.addEventListener("click", () => setMode("evolve"));
+
     render({
       ok: true,
-      note: "Use your own requirements, run async generation, watch concept snapshots evolve, then run and critique the output."
+      note: "Pick a mode first: build something new, or evolve an existing project."
     });
+    setMode("scratch");
   </script>
 </body>
 </html>
