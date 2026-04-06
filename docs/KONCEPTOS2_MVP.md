@@ -49,7 +49,7 @@ It does not persist your API key to disk. The key is only passed in each request
 ### 1. Ingest a repository
 
 ```bash
-python3 konceptos2_mvp.py ingest . -o konceptos_graph.json
+python3 konceptos2_mvp.py ingest . -o workspace/analysis/konceptos_graph.json
 ```
 
 This scans supported source files, extracts:
@@ -66,9 +66,9 @@ It then saves a structural memory graph as JSON.
 ### 2. Run impact analysis
 
 ```bash
-python3 konceptos2_mvp.py impact konceptos_graph.json \
+python3 konceptos2_mvp.py impact workspace/analysis/konceptos_graph.json \
   --changed konceptos.py \
-  -o impact_report.json
+  -o workspace/analysis/konceptos_impact.json
 ```
 
 This computes:
@@ -86,9 +86,10 @@ export OPENROUTER_API_KEY="sk-or-v1-..."
 export OPENROUTER_MODEL="anthropic/claude-opus-4.6"
 
 python3 konceptos2_mvp.py plan \
-  mvp_big_project_spec.md \
-  -o big_project_manifest.json \
-  --target-lines 10000
+  examples/specs/mvp_big_project_spec.md \
+  -o workspace/manifests/big_project_manifest.json \
+  --target-lines 10000 \
+  --target-files 8
 ```
 
 This asks the model for a JSON manifest with:
@@ -99,13 +100,18 @@ This asks the model for a JSON manifest with:
 - file list
 - file dependencies
 - approximate lines per file
+- verification rules per file
+
+If you set a small file budget like `--target-files 5`, planning is expected to
+produce a compact but complete 5-file vertical slice, not a 150-file plan that
+is later truncated.
 
 ### 4. Generate from the manifest
 
 ```bash
 python3 konceptos2_mvp.py generate \
-  big_project_manifest.json \
-  --outdir generated_big_project
+  workspace/manifests/big_project_manifest.json \
+  --outdir workspace/generated/generated_big_project
 ```
 
 This generates files one at a time using the manifest and already-generated
@@ -124,8 +130,8 @@ Generation now:
 
 ```bash
 python3 konceptos2_mvp.py verify \
-  big_project_manifest.json \
-  --outdir generated_big_project \
+  workspace/manifests/big_project_manifest.json \
+  --outdir workspace/generated/generated_big_project \
   --require-complete
 ```
 
@@ -142,10 +148,11 @@ This checks:
 
 ```bash
 python3 konceptos2_mvp.py forge \
-  mvp_big_project_spec.md \
-  --manifest big_project_manifest.json \
-  --outdir generated_big_project \
-  --target-lines 10000
+  examples/specs/mvp_big_project_spec.md \
+  --manifest workspace/manifests/big_project_manifest.json \
+  --outdir workspace/generated/generated_big_project \
+  --target-lines 10000 \
+  --target-files 8
 ```
 
 ## Current limitations

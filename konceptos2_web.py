@@ -389,13 +389,14 @@ class Handler(BaseHTTPRequestHandler):
     def handle_plan(self, body):
         client = self.build_client(body)
         req_path = self.resolve_requirements_path(body)
-        out_path = coerce_path(body.get("output") or "big_project_manifest.json")
+        out_path = coerce_path(body.get("output") or "workspace/manifests/big_project_manifest.json")
         ensure_parent(out_path)
         run_async = bool(body.get("async"))
         payload = {
             "requirements_path": str(req_path),
             "output": str(out_path),
             "target_lines": int(body.get("target_lines", 10000)),
+            "target_files": int(body.get("target_files")) if body.get("target_files") else None,
             "model": client.model,
         }
         if run_async:
@@ -404,12 +405,24 @@ class Handler(BaseHTTPRequestHandler):
                 payload,
                 lambda: {
                     "manifest_path": str(out_path),
-                    "manifest": plan_project(req_path, out_path, int(body.get("target_lines", 10000)), client),
+                    "manifest": plan_project(
+                        req_path,
+                        out_path,
+                        int(body.get("target_lines", 10000)),
+                        client,
+                        target_files=int(body.get("target_files")) if body.get("target_files") else None,
+                    ),
                 },
             )
             self.send_json({"ok": True, "job": job})
             return
-        manifest = plan_project(req_path, out_path, int(body.get("target_lines", 10000)), client)
+        manifest = plan_project(
+            req_path,
+            out_path,
+            int(body.get("target_lines", 10000)),
+            client,
+            target_files=int(body.get("target_files")) if body.get("target_files") else None,
+        )
         self.send_json({"ok": True, "manifest_path": str(out_path), "manifest": manifest})
 
     def handle_generate(self, body):
@@ -417,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
         manifest_path = coerce_path(body.get("manifest_path") or "")
         if not manifest_path.exists():
             raise RuntimeError(f"Manifest file not found: {manifest_path}")
-        outdir = coerce_path(body.get("outdir") or "generated_big_project")
+        outdir = coerce_path(body.get("outdir") or "workspace/generated/generated_big_project")
         outdir.mkdir(parents=True, exist_ok=True)
         max_files = body.get("max_files")
         run_async = bool(body.get("async"))
@@ -446,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
         manifest_path = coerce_path(body.get("manifest_path") or "")
         if not manifest_path.exists():
             raise RuntimeError(f"Manifest file not found: {manifest_path}")
-        outdir = coerce_path(body.get("outdir") or "generated_big_project")
+        outdir = coerce_path(body.get("outdir") or "workspace/generated/generated_big_project")
         max_files = body.get("max_files")
         verification = verify_project(
             manifest_path,
@@ -459,8 +472,8 @@ class Handler(BaseHTTPRequestHandler):
     def handle_forge(self, body):
         client = self.build_client(body)
         req_path = self.resolve_requirements_path(body)
-        manifest_path = coerce_path(body.get("manifest") or "big_project_manifest.json")
-        outdir = coerce_path(body.get("outdir") or "generated_big_project")
+        manifest_path = coerce_path(body.get("manifest") or "workspace/manifests/big_project_manifest.json")
+        outdir = coerce_path(body.get("outdir") or "workspace/generated/generated_big_project")
         ensure_parent(manifest_path)
         outdir.mkdir(parents=True, exist_ok=True)
         max_files = body.get("max_files")
@@ -470,12 +483,20 @@ class Handler(BaseHTTPRequestHandler):
             "manifest": str(manifest_path),
             "outdir": str(outdir),
             "target_lines": int(body.get("target_lines", 10000)),
+            "target_files": int(body.get("target_files")) if body.get("target_files") else None,
             "max_files": int(max_files) if max_files else None,
             "model": client.model,
         }
 
         def run_forge():
-            manifest = plan_project(req_path, manifest_path, int(body.get("target_lines", 10000)), client)
+            file_budget = int(body.get("target_files")) if body.get("target_files") else (int(max_files) if max_files else None)
+            manifest = plan_project(
+                req_path,
+                manifest_path,
+                int(body.get("target_lines", 10000)),
+                client,
+                target_files=file_budget,
+            )
             generation = generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None)
             graph = ingest_repository(outdir)
             graph_path = outdir / "konceptos_graph.json"

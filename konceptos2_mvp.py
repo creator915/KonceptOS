@@ -656,7 +656,15 @@ def print_impact(report):
         print(f"  C{concept['index']:02d} L{concept['layer']}: [{contracts}] <- [{files}]")
 
 
-def manifest_prompt(requirements_text, target_lines):
+def manifest_prompt(requirements_text, target_lines, target_files=None):
+    file_budget_rules = ""
+    if target_files:
+        file_budget_rules = (
+            f"- The entire project must fit within at most {target_files} files.\n"
+            f"- Treat {target_files} files as a hard architecture budget, not just a generation limit.\n"
+            "- If the budget is small, collapse layers deliberately and produce a compact but complete vertical slice.\n"
+            "- Do not plan extra files that will be skipped later.\n"
+        )
     return f"""
 Design a software project manifest for a sizeable, multi-file codebase.
 
@@ -672,6 +680,7 @@ Rules:
 - Use reusable contracts between files.
 - Keep internal dependencies acyclic whenever practical.
 - For every file, include a verification block that explains how the file should be checked.
+{file_budget_rules.rstrip()}
 
 JSON schema:
 {{
@@ -711,7 +720,7 @@ JSON schema:
 """
 
 
-def validate_manifest(data):
+def validate_manifest(data, target_files=None):
     if not isinstance(data, dict):
         raise RuntimeError("Manifest must be a JSON object.")
     for key in MANIFEST_SCHEMA:
@@ -730,21 +739,43 @@ def validate_manifest(data):
         item["verification"] = normalize_verification_block(item)
         seen.add(item["path"])
         total += int(item["approx_lines"])
+    if target_files and len(data["files"]) > target_files:
+        raise RuntimeError(
+            f"Manifest planned {len(data['files'])} files, which exceeds the requested file budget of {target_files}."
+        )
     data["approx_total_lines"] = total
     return data
 
 
-def plan_project(requirements_path, output_path, target_lines, client):
+def plan_project(requirements_path, output_path, target_lines, client, target_files=None):
     requirements_text = read_text(requirements_path)
     system = "You are an expert software architect. Output valid JSON only."
-    user = manifest_prompt(requirements_text, target_lines)
-    reply = client.chat(system, user, max_tokens=32000)
-    data, err = extract_json(reply)
-    if not data:
-        raise RuntimeError(f"Manifest extraction failed: {err}")
-    data = validate_manifest(data)
+    user = manifest_prompt(requirements_text, target_lines, target_files=target_files)
+    last_error = None
+    for attempt in range(2):
+        reply = client.chat(system, user, max_tokens=32000)
+        data, err = extract_json(reply)
+        if not data:
+            last_error = f"Manifest extraction failed: {err}"
+            continue
+        try:
+            data = validate_manifest(data, target_files=target_files)
+            break
+        except RuntimeError as exc:
+            last_error = str(exc)
+            if attempt == 0 and target_files:
+                user += (
+                    "\n\nThe previous answer violated the file budget. "
+                    f"Retry with no more than {target_files} files and keep the project complete."
+                )
+                continue
+            raise
+    else:
+        raise RuntimeError(last_error or "Manifest planning failed.")
     data["generated_at"] = now_iso()
     data["source_requirements"] = str(requirements_path)
+    if target_files:
+        data["target_files"] = target_files
     write_json(output_path, data)
     return data
 
@@ -1208,7 +1239,13 @@ def client_from_args(args):
 
 def cmd_plan(args):
     client = client_from_args(args)
-    manifest = plan_project(args.requirements, args.output, args.target_lines, client)
+    manifest = plan_project(
+        args.requirements,
+        args.output,
+        args.target_lines,
+        client,
+        target_files=args.target_files,
+    )
     print(f"project_name: {manifest['project_name']}")
     print(f"files: {len(manifest['files'])}")
     print(f"approx_total_lines: {manifest['approx_total_lines']}")
@@ -1239,7 +1276,14 @@ def cmd_forge(args):
     if not spec_path.exists():
         spec_path.write_text(default_big_project_spec(), encoding="utf-8")
         print(f"created default requirements: {spec_path}")
-    manifest = plan_project(spec_path, args.manifest, args.target_lines, client)
+    target_files = args.target_files if args.target_files else args.max_files
+    manifest = plan_project(
+        spec_path,
+        args.manifest,
+        args.target_lines,
+        client,
+        target_files=target_files,
+    )
     print(f"planned {len(manifest['files'])} files")
     report = generate_project(args.manifest, args.outdir, client, max_files=args.max_files)
     graph = ingest_repository(args.outdir)
@@ -1272,6 +1316,7 @@ def build_parser():
     plan.add_argument("requirements", help="Requirements markdown file")
     plan.add_argument("-o", "--output", required=True, help="Manifest JSON output")
     plan.add_argument("--target-lines", type=int, default=10000, help="Approximate total LOC target")
+    plan.add_argument("--target-files", type=int, help="Hard file budget for a complete compact project")
     plan.add_argument("--model", default=DEFAULT_MODEL, help="OpenRouter model")
     plan.add_argument("--api-key", help="OpenRouter API key. Prefer OPENROUTER_API_KEY.")
     plan.set_defaults(func=cmd_plan)
@@ -1296,6 +1341,7 @@ def build_parser():
     forge.add_argument("--manifest", required=True, help="Manifest JSON output path")
     forge.add_argument("--outdir", required=True, help="Output directory")
     forge.add_argument("--target-lines", type=int, default=10000, help="Approximate total LOC target")
+    forge.add_argument("--target-files", type=int, help="Hard file budget for a complete compact project")
     forge.add_argument("--max-files", type=int, help="Generate only the first N files")
     forge.add_argument("--model", default=DEFAULT_MODEL, help="OpenRouter model")
     forge.add_argument("--api-key", help="OpenRouter API key. Prefer OPENROUTER_API_KEY.")

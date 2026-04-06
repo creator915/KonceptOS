@@ -108,11 +108,11 @@ python3 konceptos.py
 ### KonceptOS 2.0 MVP CLI
 
 ```bash
-python3 konceptos2_mvp.py ingest . -o konceptos_graph.json
+python3 konceptos2_mvp.py ingest . -o workspace/analysis/konceptos_graph.json
 
-python3 konceptos2_mvp.py impact konceptos_graph.json \
+python3 konceptos2_mvp.py impact workspace/analysis/konceptos_graph.json \
   --changed konceptos.py \
-  -o konceptos_impact.json
+  -o workspace/analysis/konceptos_impact.json
 ```
 
 ### Manifest-first planning
@@ -123,28 +123,30 @@ export OPENROUTER_MODEL="anthropic/claude-opus-4.6"
 export OPENROUTER_TIMEOUT_SECONDS=600
 
 python3 konceptos2_mvp.py plan \
-  mvp_big_project_spec.md \
-  -o big_project_manifest.json \
-  --target-lines 10000
+  examples/specs/mvp_big_project_spec.md \
+  -o workspace/manifests/big_project_manifest.json \
+  --target-lines 10000 \
+  --target-files 8
 ```
 
 ### Dependency-ready generation
 
 ```bash
 python3 konceptos2_mvp.py generate \
-  big_project_manifest.json \
-  --outdir generated_big_project
+  workspace/manifests/big_project_manifest.json \
+  --outdir workspace/generated/generated_big_project
 ```
 
 Generation now writes incremental reports and snapshots as it goes.
 If the run is interrupted, re-running the command resumes from the files already present.
+If you want a compact but complete demo, set the file budget at planning time with `--target-files`.
 
 ### Verification
 
 ```bash
 python3 konceptos2_mvp.py verify \
-  big_project_manifest.json \
-  --outdir generated_big_project \
+  workspace/manifests/big_project_manifest.json \
+  --outdir workspace/generated/generated_big_project \
   --require-complete
 ```
 
@@ -239,6 +241,14 @@ The web demo also adds a minimal experience loop:
 - record user feedback
 - turn that feedback into a repair brief for the next iteration
 
+### Workspace layout
+
+To keep the repository clean, generated artifacts now live under `workspace/`:
+
+- `workspace/analysis/` for local ingest and impact JSON
+- `workspace/manifests/` for planned project manifests
+- `workspace/generated/` for generated demos and experiment outputs
+
 ---
 
 ## Why this is closer to a real product
@@ -300,7 +310,7 @@ Core:
 Docs:
 
 - `README.md`
-- `KONCEPTOS2_MVP.md`
+- `docs/KONCEPTOS2_MVP.md`
 - `TUTORIAL.md`
 - `TUTORIAL中文版.md`
 

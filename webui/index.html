@@ -367,7 +367,7 @@
         </label>
         <label>
           Optional Graph Output Path
-          <input id="ingest-output" value="konceptos_graph.json" />
+          <input id="ingest-output" value="workspace/analysis/konceptos_graph.json" />
         </label>
         <div class="actions">
           <button class="primary" id="run-ingest">Run Ingest</button>
@@ -380,7 +380,7 @@
         <p class="lead">Use a repo root or an existing graph JSON, then analyze proposed file changes.</p>
         <label>
           Source Repo or Graph JSON
-          <input id="impact-source" value="konceptos_graph.json" />
+          <input id="impact-source" value="workspace/analysis/konceptos_graph.json" />
         </label>
         <label>
           Changed Files, One Per Line
@@ -393,7 +393,7 @@
           </label>
           <label>
             Optional Report Output Path
-            <input id="impact-output" value="konceptos_impact.json" />
+            <input id="impact-output" value="workspace/analysis/konceptos_impact.json" />
           </label>
         </div>
         <div class="actions">
@@ -407,7 +407,7 @@
         <p class="lead">Start from your own requirement text. The file path is optional.</p>
         <label>
           Requirements File Path
-          <input id="plan-requirements-path" value="" placeholder="optional: /abs/path/to/requirements.md" />
+          <input id="plan-requirements-path" value="examples/specs/mvp_big_project_spec.md" placeholder="optional: /abs/path/to/requirements.md" />
         </label>
         <label>
           Your Requirements
@@ -416,21 +416,27 @@
         <div class="row-3">
           <label>
             Manifest Output
-            <input id="plan-output" value="big_project_manifest.json" />
+            <input id="plan-output" value="workspace/manifests/big_project_manifest.json" />
           </label>
           <label>
             Target Lines
             <input id="plan-target-lines" type="number" value="10000" min="1000" />
           </label>
           <label>
+            Project File Budget
+            <input id="plan-target-files" type="number" value="8" min="1" />
+          </label>
+        </div>
+        <div class="row">
+          <label>
             Model
             <input id="plan-model" value="anthropic/claude-opus-4.6" />
           </label>
+          <label>
+            OpenRouter API Key
+            <input id="plan-api-key" type="password" placeholder="sk-or-v1-..." />
+          </label>
         </div>
-        <label>
-          OpenRouter API Key
-          <input id="plan-api-key" type="password" placeholder="sk-or-v1-..." />
-        </label>
         <div class="actions">
           <button class="primary" id="load-default-spec">Load Default Spec</button>
           <button class="secondary" id="run-plan">Plan Project</button>
@@ -440,21 +446,21 @@
 
       <article class="panel">
         <h2>Generation</h2>
-        <p class="lead">Generate file-by-file from the manifest so structure survives prompt boundaries.</p>
+        <p class="lead">Generate file-by-file from the manifest so structure survives prompt boundaries. Leave “Generate Limit” empty if you want the whole planned project. Use a small planning budget if you want a complete small demo.</p>
         <div class="row">
           <label>
             Manifest Path
-            <input id="generate-manifest-path" value="big_project_manifest.json" />
+            <input id="generate-manifest-path" value="workspace/manifests/big_project_manifest.json" />
           </label>
           <label>
             Output Directory
-            <input id="generate-outdir" value="generated_big_project" />
+            <input id="generate-outdir" value="/Users/renzhenzhen/Documents/博二/KonceptOS/workspace/generated/generated_big_project" />
           </label>
         </div>
         <div class="row-3">
           <label>
-            Max Files
-            <input id="generate-max-files" type="number" placeholder="optional" min="1" />
+            Generate Limit
+            <input id="generate-max-files" type="number" placeholder="optional resume/tooling limit" min="1" />
           </label>
           <label>
             Model
@@ -503,7 +509,7 @@
           <div class="row">
             <label>
               Run Directory
-              <input id="run-cwd" value="/Users/renzhenzhen/Documents/博二/KonceptOS/generated_big_project" />
+              <input id="run-cwd" value="/Users/renzhenzhen/Documents/博二/KonceptOS/workspace/generated/generated_big_project" />
             </label>
             <label>
               Preview URL
@@ -528,11 +534,11 @@
           <div class="row">
             <label>
               Manifest Path
-              <input id="feedback-manifest-path" value="big_project_manifest.json" />
+              <input id="feedback-manifest-path" value="/Users/renzhenzhen/Documents/博二/KonceptOS/workspace/manifests/big_project_manifest.json" />
             </label>
             <label>
               Output Directory
-              <input id="feedback-outdir" value="/Users/renzhenzhen/Documents/博二/KonceptOS/generated_big_project" />
+              <input id="feedback-outdir" value="/Users/renzhenzhen/Documents/博二/KonceptOS/workspace/generated/generated_big_project" />
             </label>
           </div>
           <label>
@@ -786,6 +792,7 @@
         requirements_text: document.getElementById("plan-requirements-text").value,
         output: document.getElementById("plan-output").value,
         target_lines: Number(document.getElementById("plan-target-lines").value || "10000"),
+        target_files: Number(document.getElementById("plan-target-files").value || "0") || null,
         model: document.getElementById("plan-model").value,
         api_key: document.getElementById("plan-api-key").value,
         async: true
@@ -819,6 +826,7 @@
         manifest: document.getElementById("plan-output").value,
         outdir: document.getElementById("generate-outdir").value,
         target_lines: Number(document.getElementById("plan-target-lines").value || "10000"),
+        target_files: Number(document.getElementById("plan-target-files").value || "0") || null,
         max_files: document.getElementById("generate-max-files").value,
         model: document.getElementById("generate-model").value,
         api_key: document.getElementById("generate-api-key").value,
