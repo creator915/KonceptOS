@@ -1112,7 +1112,7 @@ Rules:
 """
 
 
-def generate_project(manifest_path, outdir, client, max_files=None):
+def generate_project(manifest_path, outdir, client, max_files=None, progress_callback=None):
     manifest = json.loads(read_text(manifest_path))
     validate_manifest(manifest)
     outdir = Path(outdir)
@@ -1143,6 +1143,15 @@ def generate_project(manifest_path, outdir, client, max_files=None):
             )
     latest_verification = append_generation_snapshot(report, manifest_path, outdir, max_files, last_file="resume")
     write_generation_report(report_path, report)
+    if progress_callback:
+        progress_callback(
+            {
+                "stage": "resume",
+                "report_path": str(report_path),
+                "files_recorded": len(report["files"]),
+                "latest_verification": latest_verification["summary"],
+            }
+        )
     pending = [file_spec for file_spec in selected_specs if file_spec["path"] not in generated_files]
     while pending:
         ready_spec = None
@@ -1186,32 +1195,51 @@ def generate_project(manifest_path, outdir, client, max_files=None):
         )
         latest_verification = append_generation_snapshot(report, manifest_path, outdir, max_files, last_file=file_spec["path"])
         write_generation_report(report_path, report)
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "generated",
+                    "file": file_spec["path"],
+                    "report_path": str(report_path),
+                    "files_recorded": len(report["files"]),
+                    "latest_verification": latest_verification["summary"],
+                }
+            )
     report["actual_total_lines"] = sum(item["actual_lines"] for item in report["files"])
     report["approx_total_lines"] = sum(item["approx_lines"] for item in report["files"])
     report["final_verification"] = verify_project(manifest_path, outdir, max_files=max_files, require_complete=True)
     write_generation_report(report_path, report)
+    if progress_callback:
+        progress_callback(
+            {
+                "stage": "final",
+                "report_path": str(report_path),
+                "files_recorded": len(report["files"]),
+                "final_verification": report["final_verification"]["summary"],
+            }
+        )
     return report
 
 
 def default_big_project_spec():
-    return """# Multi-Tenant AI Delivery Platform
+    return """# Mario UI Demo
 
-Build a production-style software platform around 10,000 lines of code.
+Build a small but complete playable browser demo inspired by Super Mario.
 
-The product lets teams define AI-powered delivery workflows for software projects.
-Users can create workspaces, repositories, task boards, architecture notes, and
-automated coding jobs. The system should:
+Requirements:
 
-- Support multi-tenant organizations and role-based access control
-- Provide an API server, a web frontend, background workers, and test coverage
-- Store tasks, repos, prompts, runs, logs, artifacts, and approvals
-- Let users create a structured implementation plan before code generation
-- Track architecture contracts, file ownership, and impact analysis
-- Show execution history and allow retrying failed jobs
-- Include a local development setup, configuration, and seed/example data
-- Include unit/integration tests for core services
+- It should be a simple web game interface, not a full engine-heavy product.
+- Include around 5 short levels.
+- The player should be able to move, jump, reach a flag, and restart.
+- Include a visible HUD with at least level progress and lives or score.
+- Keep the scope compact enough for a small demo build.
+- Prefer a small complete vertical slice over a large incomplete architecture.
 
-Prefer a realistic modular stack, not a single-file app.
+Technical preferences:
+
+- Browser-based.
+- Keep the file count small.
+- Favor direct playability and visible feedback over backend complexity.
 """
 
 

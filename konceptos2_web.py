@@ -87,6 +87,7 @@ def register_job(kind, payload):
         "result": None,
         "error": None,
         "traceback": None,
+        "heartbeat_at": now_iso(),
     }
     with JOB_LOCK:
         JOBS[job_id] = record
@@ -98,6 +99,7 @@ def update_job(job_id, **updates):
         record = JOBS[job_id]
         record.update(updates)
         record["updated_at"] = now_iso()
+        record["heartbeat_at"] = now_iso()
         return dict(record)
 
 
@@ -441,15 +443,28 @@ class Handler(BaseHTTPRequestHandler):
             "model": client.model,
         }
         if run_async:
+            job_ref = {}
+
+            def run_generate():
+                report = generate_project(
+                    manifest_path,
+                    outdir,
+                    client,
+                    max_files=int(max_files) if max_files else None,
+                    progress_callback=lambda event: update_job(job_ref["job_id"], progress=event),
+                )
+                return {
+                    "outdir": str(outdir),
+                    "manifest_path": str(manifest_path),
+                    "report": report,
+                }
+
             job = start_background_job(
                 "generate",
                 payload,
-                lambda: {
-                    "outdir": str(outdir),
-                    "manifest_path": str(manifest_path),
-                    "report": generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None),
-                },
+                run_generate,
             )
+            job_ref["job_id"] = job["job_id"]
             self.send_json({"ok": True, "job": job})
             return
         report = generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None)
@@ -497,7 +512,13 @@ class Handler(BaseHTTPRequestHandler):
                 client,
                 target_files=file_budget,
             )
-            generation = generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None)
+            generation = generate_project(
+                manifest_path,
+                outdir,
+                client,
+                max_files=int(max_files) if max_files else None,
+                progress_callback=lambda event: update_job(job_ref["job_id"], progress=event),
+            )
             graph = ingest_repository(outdir)
             graph_path = outdir / "konceptos_graph.json"
             graph_path.write_text(json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -517,7 +538,9 @@ class Handler(BaseHTTPRequestHandler):
             }
 
         if run_async:
+            job_ref = {}
             job = start_background_job("forge", payload, run_forge)
+            job_ref["job_id"] = job["job_id"]
             self.send_json({"ok": True, "job": job})
             return
         self.send_json({"ok": True, **run_forge()})

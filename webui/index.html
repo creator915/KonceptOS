@@ -427,7 +427,7 @@
         <p class="lead">直接说你想开发什么。系统会先做规划，再按文件预算生成一个完整可体验的 demo。</p>
         <label>
           你想开发什么东西？
-          <textarea id="plan-requirements-text" placeholder="例如：做一个可以上传图片并生成海报的小网站，需要登录、作品列表和一个简洁的编辑页面。"></textarea>
+          <textarea id="plan-requirements-text" placeholder="例如：我想生成一个小游戏的界面，就是超级马里奥，大概 5 关左右。"></textarea>
         </label>
         <div class="row-3">
           <label>
@@ -624,6 +624,7 @@
     let activeJobId = null;
     let activeRunId = null;
     let pollTimer = null;
+    let lastHeartbeatAt = null;
 
     function setStatus(id, text) {
       document.getElementById(id).textContent = text;
@@ -728,6 +729,7 @@
 
     function startJobPolling(jobId, statusId) {
       activeJobId = jobId;
+      lastHeartbeatAt = null;
       if (pollTimer) {
         clearInterval(pollTimer);
       }
@@ -736,11 +738,18 @@
           const data = await fetchJob(jobId);
           render(data);
           const job = data.job;
+          if (job.heartbeat_at) {
+            if (lastHeartbeatAt === job.heartbeat_at && job.status === "running") {
+              setStatus(statusId, `Job running, but no new heartbeat since ${job.heartbeat_at}. It may be stuck.`);
+            } else {
+              setStatus(statusId, `Job ${job.status}${job.heartbeat_at ? ` · heartbeat ${job.heartbeat_at}` : ""}`);
+            }
+            lastHeartbeatAt = job.heartbeat_at;
+          }
           const report = (job.result && job.result.report) || (job.result && job.result.generation && job.result.generation.report) || null;
           if (report) {
             renderSnapshots(report);
           }
-          setStatus(statusId, `Job ${job.status}`);
           done(job.status);
           if (job.status === "completed" || job.status === "failed") {
             clearInterval(pollTimer);
