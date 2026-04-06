@@ -11,11 +11,18 @@ Local no-dependency web server for:
 
 import argparse
 import json
+import os
+import shlex
+import subprocess
 import tempfile
+import threading
+import time
+import traceback
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from konceptos2_mvp import (
     OpenRouterClient,
@@ -32,6 +39,10 @@ from konceptos2_mvp import (
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "webui"
+JOB_LOCK = threading.Lock()
+JOBS = {}
+RUN_LOCK = threading.Lock()
+RUNNERS = {}
 
 
 def ensure_parent(path):
@@ -53,6 +64,139 @@ def read_json_body(handler):
     return json.loads(raw) if raw else {}
 
 
+def now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def read_report(outdir):
+    report_path = Path(outdir) / "konceptos_generation_report.json"
+    if not report_path.exists():
+        return None
+    return json.loads(report_path.read_text(encoding="utf-8", errors="replace"))
+
+
+def register_job(kind, payload):
+    job_id = uuid.uuid4().hex[:12]
+    record = {
+        "job_id": job_id,
+        "kind": kind,
+        "status": "queued",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "payload": payload,
+        "result": None,
+        "error": None,
+        "traceback": None,
+    }
+    with JOB_LOCK:
+        JOBS[job_id] = record
+    return record
+
+
+def update_job(job_id, **updates):
+    with JOB_LOCK:
+        record = JOBS[job_id]
+        record.update(updates)
+        record["updated_at"] = now_iso()
+        return dict(record)
+
+
+def get_job(job_id):
+    with JOB_LOCK:
+        record = JOBS.get(job_id)
+        return dict(record) if record else None
+
+
+def start_background_job(kind, payload, fn):
+    record = register_job(kind, payload)
+
+    def runner():
+        update_job(record["job_id"], status="running")
+        try:
+            result = fn()
+            update_job(record["job_id"], status="completed", result=result)
+        except Exception as exc:
+            update_job(
+                record["job_id"],
+                status="failed",
+                error=str(exc),
+                traceback=traceback.format_exc(),
+            )
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    return record
+
+
+def register_runner(cwd, command, preview_url):
+    run_id = uuid.uuid4().hex[:12]
+    record = {
+        "run_id": run_id,
+        "cwd": str(cwd),
+        "command": command,
+        "preview_url": preview_url,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "status": "starting",
+        "output": [],
+        "pid": None,
+    }
+    with RUN_LOCK:
+        RUNNERS[run_id] = record
+    return record
+
+
+def append_runner_output(run_id, line):
+    with RUN_LOCK:
+        record = RUNNERS[run_id]
+        record["output"].append(line.rstrip())
+        record["output"] = record["output"][-200:]
+        record["updated_at"] = now_iso()
+
+
+def update_runner(run_id, **updates):
+    with RUN_LOCK:
+        record = RUNNERS[run_id]
+        record.update(updates)
+        record["updated_at"] = now_iso()
+        return dict(record)
+
+
+def get_runner(run_id):
+    with RUN_LOCK:
+        record = RUNNERS.get(run_id)
+        return dict(record) if record else None
+
+
+def start_runner(cwd, command, preview_url=None):
+    record = register_runner(cwd, command, preview_url)
+    proc = subprocess.Popen(
+        command if isinstance(command, str) else shlex.join(command),
+        cwd=str(cwd),
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    update_runner(record["run_id"], status="running", pid=proc.pid)
+
+    def pump():
+        try:
+            if proc.stdout:
+                for line in proc.stdout:
+                    append_runner_output(record["run_id"], line)
+            proc.wait()
+            status = "completed" if proc.returncode == 0 else "failed"
+            update_runner(record["run_id"], status=status, returncode=proc.returncode)
+        except Exception as exc:
+            append_runner_output(record["run_id"], f"runner error: {exc}")
+            update_runner(record["run_id"], status="failed")
+
+    threading.Thread(target=pump, daemon=True).start()
+    return record
+
+
 class KonceptOSWebServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -71,6 +215,15 @@ class Handler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if parsed.path == "/api/report":
+            self.handle_report_query(parsed)
+            return
+        if parsed.path.startswith("/api/jobs/"):
+            self.handle_job_status(parsed.path.split("/")[-1])
+            return
+        if parsed.path.startswith("/api/runs/"):
+            self.handle_run_status(parsed.path.split("/")[-1])
+            return
         self.serve_static(parsed.path)
 
     def do_POST(self):
@@ -87,6 +240,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.handle_generate(body)
             elif parsed.path == "/api/verify":
                 self.handle_verify(body)
+            elif parsed.path == "/api/run/start":
+                self.handle_run_start(body)
+            elif parsed.path == "/api/run/stop":
+                self.handle_run_stop(body)
+            elif parsed.path == "/api/feedback":
+                self.handle_feedback(body)
             elif parsed.path == "/api/forge":
                 self.handle_forge(body)
             elif parsed.path == "/api/default-spec":
@@ -136,6 +295,45 @@ class Handler(BaseHTTPRequestHandler):
 
     def build_client(self, body):
         return OpenRouterClient(api_key=body.get("api_key"), model=body.get("model") or self.server.default_model)
+
+    def normalize_job_result(self, result):
+        if not result:
+            return None
+        outdir = result.get("outdir")
+        report = read_report(outdir) if outdir else None
+        normalized = dict(result)
+        if report:
+            normalized["report"] = report
+        return normalized
+
+    def handle_report_query(self, parsed):
+        params = parse_qs(parsed.query)
+        outdir = params.get("outdir", [""])[0]
+        if not outdir:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Missing outdir query parameter.")
+            return
+        report = read_report(coerce_path(outdir))
+        if not report:
+            self.send_error_json(HTTPStatus.NOT_FOUND, f"No report found for {outdir}")
+            return
+        self.send_json({"ok": True, "report": report})
+
+    def handle_job_status(self, job_id):
+        record = get_job(job_id)
+        if not record:
+            self.send_error_json(HTTPStatus.NOT_FOUND, f"Unknown job: {job_id}")
+            return
+        result = self.normalize_job_result(record.get("result"))
+        payload = dict(record)
+        payload["result"] = result
+        self.send_json({"ok": True, "job": payload})
+
+    def handle_run_status(self, run_id):
+        record = get_runner(run_id)
+        if not record:
+            self.send_error_json(HTTPStatus.NOT_FOUND, f"Unknown run: {run_id}")
+            return
+        self.send_json({"ok": True, "run": record})
 
     def resolve_requirements_path(self, body):
         req_text = (body.get("requirements_text") or "").strip()
@@ -193,6 +391,24 @@ class Handler(BaseHTTPRequestHandler):
         req_path = self.resolve_requirements_path(body)
         out_path = coerce_path(body.get("output") or "big_project_manifest.json")
         ensure_parent(out_path)
+        run_async = bool(body.get("async"))
+        payload = {
+            "requirements_path": str(req_path),
+            "output": str(out_path),
+            "target_lines": int(body.get("target_lines", 10000)),
+            "model": client.model,
+        }
+        if run_async:
+            job = start_background_job(
+                "plan",
+                payload,
+                lambda: {
+                    "manifest_path": str(out_path),
+                    "manifest": plan_project(req_path, out_path, int(body.get("target_lines", 10000)), client),
+                },
+            )
+            self.send_json({"ok": True, "job": job})
+            return
         manifest = plan_project(req_path, out_path, int(body.get("target_lines", 10000)), client)
         self.send_json({"ok": True, "manifest_path": str(out_path), "manifest": manifest})
 
@@ -204,6 +420,25 @@ class Handler(BaseHTTPRequestHandler):
         outdir = coerce_path(body.get("outdir") or "generated_big_project")
         outdir.mkdir(parents=True, exist_ok=True)
         max_files = body.get("max_files")
+        run_async = bool(body.get("async"))
+        payload = {
+            "manifest_path": str(manifest_path),
+            "outdir": str(outdir),
+            "max_files": int(max_files) if max_files else None,
+            "model": client.model,
+        }
+        if run_async:
+            job = start_background_job(
+                "generate",
+                payload,
+                lambda: {
+                    "outdir": str(outdir),
+                    "manifest_path": str(manifest_path),
+                    "report": generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None),
+                },
+            )
+            self.send_json({"ok": True, "job": job})
+            return
         report = generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None)
         self.send_json({"ok": True, "outdir": str(outdir), "report": report})
 
@@ -228,26 +463,114 @@ class Handler(BaseHTTPRequestHandler):
         outdir = coerce_path(body.get("outdir") or "generated_big_project")
         ensure_parent(manifest_path)
         outdir.mkdir(parents=True, exist_ok=True)
-        manifest = plan_project(req_path, manifest_path, int(body.get("target_lines", 10000)), client)
         max_files = body.get("max_files")
-        generation = generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None)
-        graph = ingest_repository(outdir)
-        graph_path = outdir / "konceptos_graph.json"
-        graph_path.write_text(json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8")
-        verification = verify_project(
-            manifest_path,
-            outdir,
-            max_files=int(max_files) if max_files else None,
-            require_complete=False,
-        )
-        self.send_json(
-            {
-                "ok": True,
+        run_async = bool(body.get("async"))
+        payload = {
+            "requirements_path": str(req_path),
+            "manifest": str(manifest_path),
+            "outdir": str(outdir),
+            "target_lines": int(body.get("target_lines", 10000)),
+            "max_files": int(max_files) if max_files else None,
+            "model": client.model,
+        }
+
+        def run_forge():
+            manifest = plan_project(req_path, manifest_path, int(body.get("target_lines", 10000)), client)
+            generation = generate_project(manifest_path, outdir, client, max_files=int(max_files) if max_files else None)
+            graph = ingest_repository(outdir)
+            graph_path = outdir / "konceptos_graph.json"
+            graph_path.write_text(json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8")
+            verification = verify_project(
+                manifest_path,
+                outdir,
+                max_files=int(max_files) if max_files else None,
+                require_complete=False,
+            )
+            return {
                 "manifest_path": str(manifest_path),
                 "outdir": str(outdir),
                 "graph_path": str(graph_path),
                 "manifest": manifest,
                 "generation": generation,
+                "verification": verification,
+            }
+
+        if run_async:
+            job = start_background_job("forge", payload, run_forge)
+            self.send_json({"ok": True, "job": job})
+            return
+        self.send_json({"ok": True, **run_forge()})
+
+    def handle_run_start(self, body):
+        cwd = coerce_path(body.get("cwd") or ".")
+        command = (body.get("command") or "").strip()
+        preview_url = (body.get("preview_url") or "").strip() or None
+        if not command:
+            raise RuntimeError("Provide a run command.")
+        if not cwd.exists():
+            raise RuntimeError(f"Run directory not found: {cwd}")
+        run = start_runner(cwd, command, preview_url)
+        self.send_json({"ok": True, "run": run})
+
+    def handle_run_stop(self, body):
+        run_id = (body.get("run_id") or "").strip()
+        record = get_runner(run_id)
+        if not record:
+            raise RuntimeError(f"Unknown run: {run_id}")
+        pid = record.get("pid")
+        if pid:
+            try:
+                os.kill(pid, 15)
+            except ProcessLookupError:
+                pass
+        updated = update_runner(run_id, status="stopped")
+        self.send_json({"ok": True, "run": updated})
+
+    def handle_feedback(self, body):
+        outdir = coerce_path(body.get("outdir") or ".")
+        ensure_parent(outdir / "konceptos_feedback" / "placeholder.txt")
+        feedback_text = (body.get("feedback") or "").strip()
+        if not feedback_text:
+            raise RuntimeError("Provide feedback text.")
+        manifest_path = body.get("manifest_path")
+        verification = None
+        if manifest_path:
+            manifest_path = coerce_path(manifest_path)
+            if manifest_path.exists():
+                verification = verify_project(manifest_path, outdir, require_complete=False)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        feedback_path = outdir / "konceptos_feedback" / f"feedback_{stamp}.md"
+        sections = [
+            "# User Feedback",
+            "",
+            f"- time: {now_iso()}",
+            f"- outdir: {outdir}",
+            "",
+            "## Experience Feedback",
+            feedback_text,
+            "",
+        ]
+        if verification:
+            sections.extend(
+                [
+                    "## Verification Summary",
+                    json.dumps(verification["summary"], ensure_ascii=False, indent=2),
+                    "",
+                ]
+            )
+        repair_brief = (
+            "You are revising a generated project after user feedback.\n\n"
+            f"Output directory: {outdir}\n\n"
+            f"User feedback:\n{feedback_text}\n\n"
+            f"Verification summary:\n{json.dumps(verification['summary'], ensure_ascii=False, indent=2) if verification else 'none'}\n\n"
+            "Return a concrete repair plan: impacted areas, files to modify, and validation steps."
+        )
+        feedback_path.write_text("\n".join(sections), encoding="utf-8")
+        self.send_json(
+            {
+                "ok": True,
+                "feedback_path": str(feedback_path),
+                "repair_brief": repair_brief,
                 "verification": verification,
             }
         )

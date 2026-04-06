@@ -977,6 +977,19 @@ def append_generation_snapshot(report, manifest_path, outdir, max_files, last_fi
     actual_total_lines = sum(item["actual_lines"] for item in report["files"])
     report["actual_total_lines"] = actual_total_lines
     report["latest_verification"] = verification
+    graph = ingest_repository(outdir) if Path(outdir).exists() else None
+    selected_path_set = set(report.get("selected_files", []))
+    existing_selected = []
+    if graph:
+        existing_selected = sorted(path for path in graph["files"] if path in selected_path_set)
+    focus = []
+    if last_file != "resume" and last_file in existing_selected:
+        focus = [last_file]
+    elif existing_selected:
+        focus = existing_selected[: min(3, len(existing_selected))]
+    local_k = None
+    if graph and focus:
+        local_k = local_projection(graph, focus, radius=1, max_attrs=24)
     report.setdefault("snapshots", []).append(
         {
             "time": now_iso(),
@@ -984,6 +997,7 @@ def append_generation_snapshot(report, manifest_path, outdir, max_files, last_fi
             "actual_total_lines": actual_total_lines,
             "summary": verification["summary"],
             "graph_summary": verification["graph_summary"],
+            "local_k": local_k,
         }
     )
     return verification

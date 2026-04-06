@@ -40,6 +40,9 @@ The Web UI exposes:
 - manifest planning
 - file-by-file generation
 - one-shot forge
+- real-time snapshot polling
+- local run/preview commands
+- feedback capture and repair-brief generation
 
 It does not persist your API key to disk. The key is only passed in each request.
 

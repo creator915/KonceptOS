@@ -88,8 +88,10 @@ It is still valuable as the mathematical core and as a compact demo of the origi
 - repo ingest
 - impact analysis
 - project planning
-- generation
+- async generation with real-time snapshot polling
 - verification
+- local run/preview commands
+- user feedback -> repair brief capture
 
 ---
 
@@ -153,6 +155,14 @@ python3 konceptos2_web.py --host 127.0.0.1 --port 8765
 ```
 
 Then open `http://127.0.0.1:8765`.
+
+The web demo now supports:
+
+- direct inline requirement input
+- async background planning/generation
+- real-time concept-evolution snapshots from the current generated repo
+- local run/preview commands
+- feedback capture after trying the generated output
 
 ---
 
@@ -219,6 +229,15 @@ The report tracks:
 - contract issues
 
 This is the beginning of the “module is actually done” loop.
+
+### Step 6: Run, experience, and repair
+
+The web demo also adds a minimal experience loop:
+
+- run a local preview command for the generated output
+- try the result in a browser
+- record user feedback
+- turn that feedback into a repair brief for the next iteration
 
 ---
 

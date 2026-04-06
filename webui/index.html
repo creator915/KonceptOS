@@ -258,11 +258,69 @@
       min-height: 18px;
     }
 
+    .stack {
+      display: grid;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .viz-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      max-height: 380px;
+      overflow: auto;
+    }
+
+    .snapshot {
+      border: 1px solid rgba(20, 32, 43, 0.1);
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: rgba(20, 32, 43, 0.035);
+    }
+
+    .snapshot strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .mini {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .lattice {
+      min-height: 380px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(20, 32, 43, 0.05), rgba(20, 32, 43, 0.02));
+      border: 1px solid rgba(20, 32, 43, 0.08);
+      padding: 14px;
+      overflow: auto;
+    }
+
+    .lattice svg {
+      width: 100%;
+      min-height: 320px;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
     @media (max-width: 1080px) {
       .hero,
       .grid,
       .row,
-      .row-3 {
+      .row-3,
+      .viz-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -291,6 +349,10 @@
         <div class="meta-stat">
           <strong>Manifest-first generation</strong>
           <p>Ask the model for architecture before asking for code.</p>
+        </div>
+        <div class="meta-stat">
+          <strong>Experience and repair</strong>
+          <p>Run the output, collect feedback, and turn that into the next revision brief.</p>
         </div>
       </div>
     </section>
@@ -342,14 +404,14 @@
 
       <article class="panel">
         <h2>Manifest Planning</h2>
-        <p class="lead">Generate a project manifest with shared contracts and a realistic file plan.</p>
+        <p class="lead">Start from your own requirement text. The file path is optional.</p>
         <label>
           Requirements File Path
-          <input id="plan-requirements-path" value="mvp_big_project_spec.md" />
+          <input id="plan-requirements-path" value="" placeholder="optional: /abs/path/to/requirements.md" />
         </label>
         <label>
-          Or Inline Requirements Text
-          <textarea id="plan-requirements-text"></textarea>
+          Your Requirements
+          <textarea id="plan-requirements-text" placeholder="Describe the product you want to build, the stack, and the user experience you care about."></textarea>
         </label>
         <div class="row-3">
           <label>
@@ -412,6 +474,79 @@
       </article>
     </section>
 
+    <section class="stack">
+      <section class="viz-grid">
+        <article class="panel">
+          <h2>Concept Evolution</h2>
+          <p class="lead">Generation snapshots are re-read from the repo and shown here as an evolving local K.</p>
+          <div class="timeline" id="snapshot-timeline">
+            <div class="snapshot">
+              <strong>No generation snapshots yet.</strong>
+              <div class="mini">Run an async generate or forge job to see the structure evolve.</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Lattice View</h2>
+          <p class="lead">A lightweight visualization of concept groups from the latest local projection.</p>
+          <div class="lattice" id="lattice-view">
+            <div class="subtle">No local concept data yet.</div>
+          </div>
+        </article>
+      </section>
+
+      <section class="viz-grid">
+        <article class="panel">
+          <h2>Run And Preview</h2>
+          <p class="lead">Start a local command for the generated project, then open the preview URL in a browser.</p>
+          <div class="row">
+            <label>
+              Run Directory
+              <input id="run-cwd" value="/Users/renzhenzhen/Documents/博二/KonceptOS/generated_big_project" />
+            </label>
+            <label>
+              Preview URL
+              <input id="run-preview-url" value="http://127.0.0.1:9000" />
+            </label>
+          </div>
+          <label>
+            Run Command
+            <input id="run-command" value="python3 -m http.server 9000 --bind 127.0.0.1" />
+          </label>
+          <div class="actions">
+            <button class="secondary" id="run-start">Start Run</button>
+            <button class="ghost" id="run-open-preview">Open Preview</button>
+            <button class="ghost" id="run-stop">Stop Run</button>
+          </div>
+          <div class="status" id="run-status"></div>
+        </article>
+
+        <article class="panel">
+          <h2>Feedback And Repair</h2>
+          <p class="lead">After trying the generated app, capture your feedback and turn it into a repair brief.</p>
+          <div class="row">
+            <label>
+              Manifest Path
+              <input id="feedback-manifest-path" value="big_project_manifest.json" />
+            </label>
+            <label>
+              Output Directory
+              <input id="feedback-outdir" value="/Users/renzhenzhen/Documents/博二/KonceptOS/generated_big_project" />
+            </label>
+          </div>
+          <label>
+            Experience Feedback
+            <textarea id="feedback-text" placeholder="For example: the page opens but the renderer is blank, login flow feels broken, or planning page is missing retry history."></textarea>
+          </label>
+          <div class="actions">
+            <button class="primary" id="run-feedback">Create Repair Brief</button>
+          </div>
+          <div class="status" id="feedback-status"></div>
+        </article>
+      </section>
+    </section>
+
     <section class="console">
       <div class="console-head">
         <strong>Result Console</strong>
@@ -424,6 +559,11 @@
   <script>
     const output = document.getElementById("console-output");
     const badge = document.getElementById("console-badge");
+    const snapshotTimeline = document.getElementById("snapshot-timeline");
+    const latticeView = document.getElementById("lattice-view");
+    let activeJobId = null;
+    let activeRunId = null;
+    let pollTimer = null;
 
     function setStatus(id, text) {
       document.getElementById(id).textContent = text;
@@ -441,6 +581,132 @@
       badge.textContent = label;
     }
 
+    function normalizeLines(value) {
+      if (!value) return [];
+      if (Array.isArray(value)) return value.filter(Boolean);
+      return String(value).split("\n").map(v => v.trim()).filter(Boolean);
+    }
+
+    function shortSummary(summary) {
+      if (!summary) return "No verification summary.";
+      return Object.entries(summary).map(([k, v]) => `${k}: ${v}`).join(" | ");
+    }
+
+    function renderSnapshots(report) {
+      const snapshots = (report && report.snapshots) || [];
+      if (!snapshots.length) {
+        snapshotTimeline.innerHTML = `
+          <div class="snapshot">
+            <strong>No generation snapshots yet.</strong>
+            <div class="mini">Run an async generate or forge job to see the structure evolve.</div>
+          </div>
+        `;
+        latticeView.innerHTML = `<div class="subtle">No local concept data yet.</div>`;
+        return;
+      }
+      snapshotTimeline.innerHTML = snapshots.slice(-10).reverse().map((snap, index) => `
+        <div class="snapshot">
+          <strong>${snap.last_file || "snapshot"} • ${snap.time}</strong>
+          <div class="mini">${shortSummary(snap.summary)}</div>
+        </div>
+      `).join("");
+      const latest = snapshots[snapshots.length - 1];
+      renderLattice(latest.local_k);
+    }
+
+    function renderLattice(localK) {
+      if (!localK || !localK.concepts || !localK.concepts.length) {
+        latticeView.innerHTML = `<div class="subtle">No local concept data yet.</div>`;
+        return;
+      }
+      const concepts = localK.concepts.slice(0, 12);
+      const width = 760;
+      const height = Math.max(260, concepts.length * 38);
+      const nodes = concepts.map((concept, index) => {
+        const x = 80 + concept.layer * 140;
+        const y = 30 + index * 34;
+        return { concept, x, y };
+      });
+      const svg = `
+        <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet">
+          <defs>
+            <linearGradient id="nodeFill" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#b44a2e" stop-opacity="0.92"></stop>
+              <stop offset="100%" stop-color="#1f5e7a" stop-opacity="0.92"></stop>
+            </linearGradient>
+          </defs>
+          ${nodes.map(node => `
+            <line x1="40" y1="${node.y + 8}" x2="${node.x}" y2="${node.y + 8}" stroke="rgba(20,32,43,0.15)" stroke-width="1" />
+            <rect x="${node.x}" y="${node.y}" rx="12" ry="12" width="170" height="24" fill="url(#nodeFill)"></rect>
+            <text x="${node.x + 10}" y="${node.y + 16}" fill="#fff7f2" font-size="11" font-family="SFMono-Regular, Menlo, monospace">
+              C${String(node.concept.index).padStart(2, "0")} · L${node.concept.layer} · ${(node.concept.contracts || []).slice(0, 2).join(", ").slice(0, 40)}
+            </text>
+          `).join("")}
+        </svg>
+      `;
+      latticeView.innerHTML = svg + `<div class="subtle">focus: ${(localK.focus || []).join(", ") || "-"}</div>`;
+    }
+
+    async function fetchJob(jobId) {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      return res.json();
+    }
+
+    async function fetchRun(runId) {
+      const res = await fetch(`/api/runs/${runId}`);
+      return res.json();
+    }
+
+    function startJobPolling(jobId, statusId) {
+      activeJobId = jobId;
+      if (pollTimer) {
+        clearInterval(pollTimer);
+      }
+      pollTimer = setInterval(async () => {
+        try {
+          const data = await fetchJob(jobId);
+          render(data);
+          const job = data.job;
+          const report = (job.result && job.result.report) || (job.result && job.result.generation && job.result.generation.report) || null;
+          if (report) {
+            renderSnapshots(report);
+          }
+          setStatus(statusId, `Job ${job.status}`);
+          done(job.status);
+          if (job.status === "completed" || job.status === "failed") {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+        } catch (err) {
+          render(String(err));
+          setStatus(statusId, String(err));
+          done("error");
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }, 2000);
+    }
+
+    function startRunPolling(runId) {
+      activeRunId = runId;
+      const tick = async () => {
+        try {
+          const data = await fetchRun(runId);
+          render(data);
+          const run = data.run;
+          setStatus("run-status", `Run ${run.status}${run.preview_url ? ` · ${run.preview_url}` : ""}`);
+          if (run.status !== "running" && run.status !== "starting") {
+            return;
+          }
+          setTimeout(tick, 2000);
+        } catch (err) {
+          render(String(err));
+          setStatus("run-status", String(err));
+        }
+      };
+      tick();
+    }
+
     async function api(path, payload, statusId, label) {
       setStatus(statusId, label + "...");
       busy(label);
@@ -456,6 +722,21 @@
           setStatus(statusId, data.error || "Request failed.");
           done("error");
           return;
+        }
+        if (data.report) {
+          renderSnapshots(data.report);
+        }
+        if (data.verification && data.verification.graph_summary) {
+          const syntheticReport = { snapshots: [{ time: new Date().toISOString(), last_file: "verify", summary: data.verification.summary, graph_summary: data.verification.graph_summary, local_k: null }] };
+          renderSnapshots(syntheticReport);
+        }
+        if (data.job && data.job.job_id) {
+          startJobPolling(data.job.job_id, statusId);
+          setStatus(statusId, `Job queued: ${data.job.job_id}`);
+          return;
+        }
+        if (data.run && data.run.run_id) {
+          startRunPolling(data.run.run_id);
         }
         setStatus(statusId, "Done.");
         done("done");
@@ -506,7 +787,8 @@
         output: document.getElementById("plan-output").value,
         target_lines: Number(document.getElementById("plan-target-lines").value || "10000"),
         model: document.getElementById("plan-model").value,
-        api_key: document.getElementById("plan-api-key").value
+        api_key: document.getElementById("plan-api-key").value,
+        async: true
       }, "plan-status", "plan");
     });
 
@@ -516,7 +798,8 @@
         outdir: document.getElementById("generate-outdir").value,
         max_files: document.getElementById("generate-max-files").value,
         model: document.getElementById("generate-model").value,
-        api_key: document.getElementById("generate-api-key").value
+        api_key: document.getElementById("generate-api-key").value,
+        async: true
       }, "generate-status", "generate");
     });
 
@@ -538,13 +821,45 @@
         target_lines: Number(document.getElementById("plan-target-lines").value || "10000"),
         max_files: document.getElementById("generate-max-files").value,
         model: document.getElementById("generate-model").value,
-        api_key: document.getElementById("generate-api-key").value
+        api_key: document.getElementById("generate-api-key").value,
+        async: true
       }, "generate-status", "forge");
+    });
+
+    document.getElementById("run-start").addEventListener("click", () => {
+      api("/api/run/start", {
+        cwd: document.getElementById("run-cwd").value,
+        command: document.getElementById("run-command").value,
+        preview_url: document.getElementById("run-preview-url").value
+      }, "run-status", "run");
+    });
+
+    document.getElementById("run-stop").addEventListener("click", () => {
+      if (!activeRunId) {
+        setStatus("run-status", "No active run.");
+        return;
+      }
+      api("/api/run/stop", { run_id: activeRunId }, "run-status", "stop");
+    });
+
+    document.getElementById("run-open-preview").addEventListener("click", () => {
+      const url = document.getElementById("run-preview-url").value.trim();
+      if (url) {
+        window.open(url, "_blank");
+      }
+    });
+
+    document.getElementById("run-feedback").addEventListener("click", () => {
+      api("/api/feedback", {
+        manifest_path: document.getElementById("feedback-manifest-path").value,
+        outdir: document.getElementById("feedback-outdir").value,
+        feedback: document.getElementById("feedback-text").value
+      }, "feedback-status", "feedback");
     });
 
     render({
       ok: true,
-      note: "Use the panels above to ingest a repo, inspect change impact, and run manifest-first generation."
+      note: "Use your own requirements, run async generation, watch concept snapshots evolve, then run and critique the output."
     });
   </script>
 </body>
