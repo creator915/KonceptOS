@@ -1,0 +1,14 @@
+{
+  "name": "konceptos",
+  "version": "0.17.0",
+  "private": true,
+  "scripts": {
+    "check": "ts-node tools/checker.ts validate",
+    "check:query": "ts-node tools/checker.ts query"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
